@@ -55,4 +55,4 @@ For commercial licensing, custom modifications, or usage beyond the scope of thi
 如需商業授權、定制修改或超出本協議範圍的使用需求，請務必聯繫作者獲取書面許可：
 
 * **Email:** ray2026worker@ray2026.dpdns.org
-* **Website:** [[網站/鏈接](https://homework.ray2026.dpdns.org/)] (Optional)
+* **Website:** [[網站/鏈接](https://homework.ray2026.dpdns.org/)]
