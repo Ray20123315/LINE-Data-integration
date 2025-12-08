@@ -42,6 +42,22 @@ Violation of the following terms will result in immediate termination of your ri
     You may **NOT** distribute, publish, or share any modified versions, enhancements, forks, or derivative works based on this code. Private modifications for local debugging are permitted but must strictly remain on your local device.
     **嚴禁**分發、發布或分享基於本代碼的任何修改版本、增強版本、復刻（Fork）或衍生作品。僅允許為了本地調試進行私有修改，但修改後的代碼嚴禁流出。
 
+### 3. CONTRIBUTION AND ACCEPTANCE POLICY (貢獻與接受政策)
+
+雖然本許可證嚴格禁止未經授權的衍生作品，但我們歡迎對本項目的發展提出建議，唯所有貢獻必須遵守本政策的條款：
+
+* **3.1 建議與問題報告 (Non-Code Suggestions):**
+    鼓勵使用者透過 GitHub 的 **Issues (問題)** 功能提交錯誤報告 (Bug Report) 或功能建議 (Feature Request)。此類非代碼性質的建議將不受「禁止演繹」條款限制。
+
+* **3.2 代碼貢獻流程 (Code Contributions - Authorized Exception):**
+    對於涉及源代碼修改的貢獻（例如：修復錯誤或增強功能），貢獻者必須透過 **Pull Request (PR)** 提交。請注意以下強制條款：
+    1.  **審核機制 (Strict Review):** 所有提交的代碼修改將接受**版權人（Licensor）的嚴格審核**。未經版權人明確接受並合併的修改版本，一律視為違反「禁止演繹」（ND）條款的衍生作品。
+    2.  **單方面智慧財產權轉讓 (Unilateral IP Grant):**
+        **透過提交 Pull Request 或任何形式的補丁 (Patch) 代碼，貢獻者即單方面且不可撤銷地授予版權人，將該貢獻代碼納入本項目的版權範圍。** 這意味著：
+        * 版權人獲得完全權利，可以對該貢獻進行修改、合併，並按照本項目的 **CC BY-NC-ND 4.0** 協議發布，或根據未來需求更改許可協議。
+        * 貢獻者僅保留署名權，但放棄該貢獻代碼的獨立商業和分發權。
+        * **除非您同意此條款，否則請勿提交任何源代碼。**
+
 ---
 
 ### DISCLAIMER (免責聲明)
