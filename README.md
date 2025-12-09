@@ -64,18 +64,22 @@ Violation of the following terms will result in immediate termination of your ri
 對於涉及源代碼修改的貢獻（例如：修復錯誤或增強功能），貢獻者必須透過 **Pull Request (PR)** 提交。請注意以下強制條款：
 For code contributions (e.g., bug fixes or enhancements), the contributor must submit via a **Pull Request (PR)**. Note the following mandatory terms:
 
-1.  **審核機制 (Strict Review):** 所有提交的代碼修改將接受**版權人（Licensor）的嚴格審核**。未經版權人明確接受並合併的修改版本，一律視為違反「禁止演繹」（ND）條款的衍生作品。
-    * **Strict Review:** All submitted code modifications are subject to **strict review by the Licensor (Copyright Holder)**. Modified versions not explicitly accepted and merged by the Licensor are considered unauthorized derivative works in violation of the No-Derivatives (ND) clause.
+1. **審核機制 (Strict Review)**
+    * 所有提交的代碼修改將接受**版權人（Licensor）的嚴格審核**。未經版權人明確接受並合併的修改版本，一律視為違反「禁止演繹」（ND）條款的衍生作品。
+        * All submitted code modifications are subject to **strict review by the Licensor (Copyright Holder)**. Modified versions not explicitly accepted and merged by the Licensor are considered unauthorized derivative works in violation of the No-Derivatives (ND) clause.
 
-2.  **單方面不可撤銷許可授權 (Unilateral, Irrevocable License Grant):** 🤝
-    * **透過提交 Pull Request 或任何形式的補丁 (Patch) 代碼，貢獻者即單方面且不可撤銷地授予版權人（Licensor），在不影響其原始署名權的前提下，將該貢獻代碼納入本項目的版權範圍。**
-    * **By submitting a Pull Request or any form of patch code, the Contributor unilaterally and irrevocably grants the Licensor a perpetual, non-exclusive right to incorporate the contribution into the project's copyright scope, without affecting the Contributor's original right to attribution.**
-    * 這意味著：版權人獲得**永久且非獨佔**的權利，可以對該貢獻進行修改、合併，並按照本項目的 **CC BY-NC-ND 4.0** 協議發布，或根據未來需求更改許可協議。
-      This means the Licensor obtains a **perpetual and non-exclusive** right to modify, merge, and publish the contribution under the project's **CC BY-NC-ND 4.0** license, or change the licensing terms in the future.
-    * 貢獻者**保留**對其貢獻代碼的版權，但授予版權人發布和控制分發的權利。
-      The Contributor **retains** the copyright to their contributed code but grants the Licensor the right to publish and control its distribution.
+2. **單方面不可撤銷許可授權 (Unilateral, Irrevocable License Grant)** 🤝
+    * 透過提交 Pull Request 或任何形式的補丁 (Patch) 代碼，貢獻者即**單方面且不可撤銷地授予版權人（Licensor）**，在不影響其原始署名權的前提下，**將該貢獻代碼納入本項目的版權範圍**。
+        * By submitting a Pull Request or any form of patch code, the Contributor **unilaterally and irrevocably grants the Licensor a perpetual, non-exclusive right** to **incorporate the contribution into the project's copyright scope**, without affecting the Contributor's original right to attribution.
+
+    * **這意味著：**版權人獲得**永久且非獨佔**的權利，可以對該貢獻進行修改、合併，並按照本項目的 **CC BY-NC-ND 4.0** 協議發布，或根據未來需求更改許可協議。
+        * This means the Licensor obtains a **perpetual and non-exclusive** right to modify, merge, and publish the contribution under the project's **CC BY-NC-ND 4.0** license, or change the licensing terms in the future.
+
+    * **貢獻者保留對其貢獻代碼的版權**，但授予版權人發布和控制分發的權利。
+        * The Contributor **retains** the copyright to their contributed code but grants the Licensor the right to publish and control its distribution.
+
     * **除非您同意此授權條款，否則請勿提交任何源代碼。**
-      **Do not submit any source code unless you agree to these license grant terms.**
+        * **Do not submit any source code unless you agree to these license grant terms.**
 
 ---
 
