@@ -1,3 +1,12 @@
+# 📜 LEGAL NOTICE & TERMS OF USE (法律聲明與使用條款)
+
+> **版權所有 © 2025 [Ray20123315/Ray chen]。保留所有權利。**  
+> **COPYRIGHT © 2025 [Ray20123315/Ray chen]. ALL RIGHTS RESERVED.**
+
+## ⚠️ PROPRIETARY SOURCE CODE (專有代碼聲明)
+
+**注意：** 本項目代碼雖於 GitHub 公開，但**絕非**標準定義下的「開源軟件」（如 MIT/Apache 協議）。本代碼受嚴格的許可條款保護。  
+**ATTENTION:** While this source code is publicly available on GitHub, it is **NOT** "Open Source" in the standard definition (e.g., MIT/Apache). It is strictly protected under specific license terms.
 <details>
 <summary><b>點擊此處查看完整的授權條款、貢獻政策與聯繫方式 (Click to view full License Terms, Contribution Policy, and Contact Info)</b></summary>
 <br>
