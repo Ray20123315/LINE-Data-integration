@@ -24,10 +24,10 @@ By accessing, downloading, or using this software, you agree to be bound by the 
 在遵守本協議的前提下，您被授予有限的、非獨佔的許可進行以下操作：
 Subject to the terms of this license, you are granted a limited, non-exclusive, revocable license to:
 
-* **個人與教育用途**：僅限用於個人學習、學術研究或課堂教學。
-    * **Personal & Educational Use:** Use the software for personal study, academic research, or classroom teaching.
+* **個人使用**：由單一使用者進行的非商業性使用。
+    * **Personal Use:** Non-commercial use conducted by a single user.
 * **內部組織用途**：允許在特定內部群組（如班級、公司部門或私有團隊）內部署並運行**未經修改**的版本，且不得涉及營利。
-    * **Internal Organizational Use:** Deploy and run the software unmodified within a specific internal group (e.g., a specific class, a company department, or a private team) for non-profit purposes.
+    * **Internal Organizational Use:** Deploy and run the software **unmodified** within a specific internal group (e.g., a specific class, a company department, or a private team) for non-profit purposes.
 * **分發**：僅允許分享**未經任何修改**的原始代碼副本，且必須保留所有版權聲明與許可條款。
     * **Distribution:** Share verbatim copies of the original source code, provided all copyright notices and license terms remain intact.
 
