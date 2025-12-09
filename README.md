@@ -1,6 +1,7 @@
-# LEGAL NOTICE & TERMS OF USE (法律聲明與使用條款)
+# 📜 LEGAL NOTICE & TERMS OF USE (法律聲明與使用條款)
 
 > **版權所有 © 2025 [Ray20123315/Ray chen]。保留所有權利。**
+>
 > **COPYRIGHT © 2025 [Ray20123315/Ray chen]. ALL RIGHTS RESERVED.**
 
 ## ⚠️ PROPRIETARY SOURCE CODE (專有代碼聲明)
@@ -23,11 +24,11 @@ By accessing, downloading, or using this software, you agree to be bound by the 
 Subject to the terms of this license, you are granted a limited, non-exclusive, revocable license to:
 
 * **個人與教育用途**：僅限用於個人學習、學術研究或課堂教學。
-    **Personal & Educational Use:** Use the software for personal study, academic research, or classroom teaching.
+    * **Personal & Educational Use:** Use the software for personal study, academic research, or classroom teaching.
 * **內部組織用途**：允許在特定內部群組（如班級、公司部門或私有團隊）內部署並運行**未經修改**的版本，且不得涉及營利。
-    **Internal Organizational Use:** Deploy and run the software unmodified within a specific internal group (e.g., a specific class, a company department, or a private team) for non-profit purposes.
+    * **Internal Organizational Use:** Deploy and run the software unmodified within a specific internal group (e.g., a specific class, a company department, or a private team) for non-profit purposes.
 * **分發**：僅允許分享**未經任何修改**的原始代碼副本，且必須保留所有版權聲明與許可條款。
-    **Distribution:** Share verbatim copies of the original source code, provided all copyright notices and license terms remain intact.
+    * **Distribution:** Share verbatim copies of the original source code, provided all copyright notices and license terms remain intact.
 
 ### 2. STRICTLY PROHIBITED ACTIONS (嚴格禁止的行為)
 違反以下條款將導致您的使用權立即終止，並可能面臨法律訴訟：
@@ -52,7 +53,7 @@ While this license strictly prohibits unauthorized derivative works, we welcome 
 
 * **3.2 代碼貢獻流程 (Code Contributions - Authorized Exception):**
     對於涉及源代碼修改的貢獻（例如：修復錯誤或增強功能），貢獻者必須透過 **Pull Request (PR)** 提交。請注意以下強制條款：
-    For code contributions (e.g., bug fixes or enhancements), the contributor must submit via a **Pull Request (PR)**. Note the following mandatory terms:
+    For code contributions (e.g., bug fixes or enhancements or enhancements), the contributor must submit via a **Pull Request (PR)**. Note the following mandatory terms:
     1.  **審核機制 (Strict Review):** 所有提交的代碼修改將接受**版權人（Licensor）的嚴格審核**。未經版權人明確接受並合併的修改版本，一律視為違反「禁止演繹」（ND）條款的衍生作品。
         **Strict Review:** All submitted code modifications are subject to **strict review by the Licensor (Copyright Holder)**. Modified versions not explicitly accepted and merged by the Licensor are considered unauthorized derivative works in violation of the No-Derivatives (ND) clause.
     2.  **單方面智慧財產權轉讓 (Unilateral IP Grant):**
