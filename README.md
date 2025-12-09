@@ -37,7 +37,7 @@ Subject to the terms of this license, you are granted a limited, non-exclusive, 
 違反以下條款將導致您的使用權立即終止，並可能面臨法律訴訟：  
 Violation of the following terms will result in immediate termination of your rights and may lead to legal action:
 
-* **🚫 嚴禁商業使用**:
+* **🚫 嚴禁商業使用 (NO COMMERCIAL USE)**:
     **嚴禁**將本軟件的全部或部分用於任何商業目的。包括但不限於：銷售軟件、作為付費服務的一部分、用於商業培訓、或任何直接/間接產生金錢利益的行為。
      * **🚫 NO COMMERCIAL USE**:You may **NOT** use this software, strictly or partially, for any commercial purpose, including but not limited to: selling the software, using it as part of a paid service, using it for commercial training, or any activity that generates direct or indirect revenue.
 
@@ -47,27 +47,35 @@ Violation of the following terms will result in immediate termination of your ri
 
 ### 3. CONTRIBUTION AND ACCEPTANCE POLICY (貢獻與接受政策)
 
-雖然本許可證嚴格禁止未經授權的衍生作品，但我們歡迎對本項目的發展提出建議，唯所有貢獻必須遵守本政策的條款：  
-While this license strictly prohibits unauthorized derivative works, we welcome suggestions for the development of this project, provided all contributions comply with the terms of this policy:
+雖然本許可證嚴格禁止未經授權的衍生作品，但我們歡迎對本項目的發展提出建議，唯所有貢獻必須遵守本政策的條款：
+* While this license strictly prohibits unauthorized derivative works, we welcome suggestions for the development of this project, provided all contributions comply with the terms of this policy:
 
-* **3.1 建議與問題報告 (Non-Code Suggestions):**
-    鼓勵使用者透過 GitHub 的 **Issues (問題)** 功能提交錯誤報告 (Bug Report) 或功能建議 (Feature Request)。此類非代碼性質的建議將不受「禁止演繹」條款限制。  
-    Users are encouraged to submit bug reports or feature requests via the GitHub **Issues** function. Such non-code suggestions are not restricted by the No-Derivatives clause.
+---
 
-* **3.2 代碼貢獻流程 (Code Contributions - Authorized Exception):**
-    對於涉及源代碼修改的貢獻（例如：修復錯誤或增強功能），貢獻者必須透過 **Pull Request (PR)** 提交。請注意以下強制條款：  
-    For code contributions (e.g., bug fixes or enhancements or enhancements), the contributor must submit via a **Pull Request (PR)**. Note the following mandatory terms:
-    1.  **審核機制 (Strict Review):** 所有提交的代碼修改將接受**版權人（Licensor）的嚴格審核**。未經版權人明確接受並合併的修改版本，一律視為違反「禁止演繹」（ND）條款的衍生作品。  
-        **Strict Review:** All submitted code modifications are subject to **strict review by the Licensor (Copyright Holder)**. Modified versions not explicitly accepted and merged by the Licensor are considered unauthorized derivative works in violation of the No-Derivatives (ND) clause.
-    2.  **單方面智慧財產權轉讓 (Unilateral IP Grant):**  
-        **透過提交 Pull Request 或任何形式的補丁 (Patch) 代碼，貢獻者即單方面且不可撤銷地授予版權人，將該貢獻代碼納入本項目的版權範圍。**  
-        **By submitting a Pull Request or any form of patch code, the Contributor unilaterally and irrevocably grants the Licensor the right to incorporate the contribution into the project's copyright scope.**
-        * 這意味著：版權人獲得完全權利，可以對該貢獻進行修改、合併，並按照本項目的 **CC BY-NC-ND 4.0** 協議發布，或根據未來需求更改許可協議。  
-            This means the Licensor obtains full rights to modify, merge, and publish the contribution under the project's **CC BY-NC-ND 4.0** license, or change the licensing terms in the future.
-        * 貢獻者僅保留署名權，但放棄該貢獻代碼的獨立商業和分發權。  
-            The Contributor retains only the right to attribution but waives independent commercial and distribution rights for the contributed code.
-        * **除非您同意此條款，否則請勿提交任何源代碼。**  
-            **Do not submit any source code unless you agree to these terms.**
+#### 3.1 建議與問題報告 (Non-Code Suggestions):
+
+鼓勵使用者透過 GitHub 的 **Issues (問題)** 功能提交錯誤報告 (Bug Report) 或功能建議 (Feature Request)。此類非代碼性質的建議將不受「禁止演繹」條款限制。
+* Users are encouraged to submit bug reports or feature requests via the GitHub **Issues** function. Such non-code suggestions are not restricted by the No-Derivatives clause.
+
+---
+
+#### 3.2 代碼貢獻流程 (Code Contributions - Authorized Exception):
+
+對於涉及源代碼修改的貢獻（例如：修復錯誤或增強功能），貢獻者必須透過 **Pull Request (PR)** 提交。請注意以下強制條款：
+For code contributions (e.g., bug fixes or enhancements), the contributor must submit via a **Pull Request (PR)**. Note the following mandatory terms:
+
+1.  **審核機制 (Strict Review):** 所有提交的代碼修改將接受**版權人（Licensor）的嚴格審核**。未經版權人明確接受並合併的修改版本，一律視為違反「禁止演繹」（ND）條款的衍生作品。
+    * **Strict Review:** All submitted code modifications are subject to **strict review by the Licensor (Copyright Holder)**. Modified versions not explicitly accepted and merged by the Licensor are considered unauthorized derivative works in violation of the No-Derivatives (ND) clause.
+
+2.  **單方面不可撤銷許可授權 (Unilateral, Irrevocable License Grant):** 🤝
+    * **透過提交 Pull Request 或任何形式的補丁 (Patch) 代碼，貢獻者即單方面且不可撤銷地授予版權人（Licensor），在不影響其原始署名權的前提下，將該貢獻代碼納入本項目的版權範圍。**
+    * **By submitting a Pull Request or any form of patch code, the Contributor unilaterally and irrevocably grants the Licensor a perpetual, non-exclusive right to incorporate the contribution into the project's copyright scope, without affecting the Contributor's original right to attribution.**
+    * 這意味著：版權人獲得**永久且非獨佔**的權利，可以對該貢獻進行修改、合併，並按照本項目的 **CC BY-NC-ND 4.0** 協議發布，或根據未來需求更改許可協議。
+      This means the Licensor obtains a **perpetual and non-exclusive** right to modify, merge, and publish the contribution under the project's **CC BY-NC-ND 4.0** license, or change the licensing terms in the future.
+    * 貢獻者**保留**對其貢獻代碼的版權，但授予版權人發布和控制分發的權利。
+      The Contributor **retains** the copyright to their contributed code but grants the Licensor the right to publish and control its distribution.
+    * **除非您同意此授權條款，否則請勿提交任何源代碼。**
+      **Do not submit any source code unless you agree to these license grant terms.**
 
 ---
 
