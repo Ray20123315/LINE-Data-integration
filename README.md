@@ -6,10 +6,13 @@
 
 ## ⚠️ PROPRIETARY SOURCE CODE (專有代碼聲明)
 
-**注意：** 本項目代碼雖於 GitHub 公開，但**絕非**標準定義下的「開源軟件」（如 MIT/Apache 協議）。本代碼受嚴格的許可條款保護。
+**注意：** 本項目代碼雖於 GitHub 公開，但**絕非**標準定義下的「開源軟件」（如 MIT/Apache 協議）。本代碼受嚴格的許可條款保護。  
 **ATTENTION:** While this source code is publicly available on GitHub, it is **NOT** "Open Source" in the standard definition (e.g., MIT/Apache). It is strictly protected under specific license terms.
 
 ---
+<details>
+<summary><b>點擊此處查看完整的授權條款、貢獻政策與聯繫方式 (Click to view full License Terms, Contribution Policy, and Contact Info)</b></summary>
+<br>
 
 ## LICENSE AGREEMENT (授權協議)
 
@@ -40,7 +43,7 @@ Violation of the following terms will result in immediate termination of your ri
 
 * **🚫 嚴禁修改與二次發布 (NO DERIVATIVE WORKS / MODIFICATIONS)**:
     **嚴禁**分發、發布或分享基於本代碼的任何修改版本、增強版本、復刻（Fork）或衍生作品。僅允許為了本地調試進行私有修改，但修改後的代碼嚴禁流出。
-     * **NO DERIVATIVE WORKS / MODIFICATIONS**:You may **NOT** distribute, publish, or share any modified versions, enhancements, forks, or derivative works based on this code. Private modifications for local debugging are permitted but must strictly remain on your local device.
+     * **🚫 NO DERIVATIVE WORKS / MODIFICATIONS**:You may **NOT** distribute, publish, or share any modified versions, enhancements, forks, or derivative works based on this code. Private modifications for local debugging are permitted but must strictly remain on your local device.
 
 ### 3. CONTRIBUTION AND ACCEPTANCE POLICY (貢獻與接受政策)
 
@@ -80,3 +83,10 @@ For commercial licensing, custom modifications, or usage beyond the scope of thi
 
 * **Email:** ray2026worker@ray2026.dpdns.org
 * **Website:** [[網站/鏈接](https://homework.ray2026.dpdns.org/)]
+
+</details>
+---
+
+# 📘 項目簡介與使用教學 (Project Overview & Usage Guide)
+
+[在此處開始您的所有教學內容，例如安裝、配置、範例程式碼等。]
