@@ -215,7 +215,7 @@ const COMMON_UI_SCRIPT = `
 
 // --- END OF PART 1 ---
 
-// --- START OF PART 2 & 3 (Logic & API Update) ---
+// --- START OF PART 2 (With Auto-Repair Call) ---
 
 export default {
     async fetch(request, env, ctx) {
@@ -223,13 +223,8 @@ export default {
         const hostname = url.hostname; 
         const CURRENT_ORIGIN = `${url.protocol}//${hostname}${url.port ? ':' + url.port : ''}`;
         
-        try {
-            await env.DB.prepare(`CREATE TABLE IF NOT EXISTS task_suggestions (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, group_id TEXT, suggested_by TEXT, suggestion_content TEXT, suggestion_subject TEXT, suggestion_category TEXT, status TEXT DEFAULT 'pending', created_at INTEGER)`).run();
-            await env.DB.prepare(`CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)`).run();
-            try { await env.DB.prepare("ALTER TABLE tasks ADD COLUMN due_time TEXT").run(); } catch(e){}
-            try { await env.DB.prepare("ALTER TABLE tasks ADD COLUMN is_reliable INTEGER DEFAULT 1").run(); } catch(e){}
-            try { await env.DB.prepare("ALTER TABLE group_auth ADD COLUMN last_data_update INTEGER").run(); } catch(e){}
-        } catch(e){}
+        // ★ 呼叫資料庫自動修復 (Part 11)
+        if (typeof autoRepairDB === 'function') await autoRepairDB(env);
 
         const isManagerSite = hostname.includes("manage") || url.pathname.startsWith("/manager");
         const isSuperAdmin = hostname.includes("super") || url.pathname === SUPER_ADMIN_PATH; 
@@ -250,36 +245,41 @@ export default {
             return handlePost(request, env, ctx, CURRENT_ORIGIN);
         }
 
-        // 3. 維護模式攔截 (★修復：首頁不受影響，只攔截有 ID 的頁面或後台)
+        // 3. 維護模式攔截
         if (!isSuperAdmin && url.pathname !== "/eula" && url.pathname !== "/terms") {
             const config = await getSystemConfig(env);
             const maint = isManagerSite ? config.maintenance?.backend : config.maintenance?.frontend;
-            
-            // 判斷是否為學生作業頁面 (有 ?id=...) 或 後台管理頁面
             const isTargetPage = url.searchParams.has('id') || isManagerSite;
 
             if (isTargetPage && maint && maint.enabled === true) {
                 let isActive = true;
-                if (maint.end && maint.end.trim() !== "" && new Date(maint.end).getTime() < Date.now()) {
-                    isActive = false;
-                }
+                if (maint.end && maint.end.trim() !== "" && new Date(maint.end).getTime() < Date.now()) { isActive = false; }
                 if (isActive) {
-                    return new Response(renderMaintenancePage(maint), { 
-                        headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-store" } 
-                    });
+                    return new Response(renderMaintenancePage(maint), { headers: { "Content-Type": "text/html;charset=utf-8", "Cache-Control": "no-store" } });
                 }
             }
         }
 
         // 4. 路由分發
-        if (url.pathname === "/terms") return new Response(renderTermsHTML(CURRENT_ORIGIN), { headers: { "Content-Type": "text/html;charset=utf-8" } });
-        if (url.pathname === "/eula") return new Response(renderEULAHTML(url.searchParams.get('redirect'), CURRENT_ORIGIN), { headers: { "Content-Type": "text/html;charset=utf-8" } });
-        if (isManagerSite) return new Response(renderManagerHTML(CURRENT_ORIGIN), { headers: { "Content-Type": "text/html;charset=utf-8" } });
-        if (isSuperAdmin) return new Response(renderSuperAdminHTML(CURRENT_ORIGIN), { headers: { "Content-Type": "text/html;charset=utf-8" } });
-        
-        const id = url.searchParams.get('id');
-        if (!id) return new Response(renderHomePage(CURRENT_ORIGIN), { headers: { "Content-Type": "text/html;charset=utf-8" } });
-        return new Response(renderStudentHTML(CURRENT_ORIGIN), { headers: { "Content-Type": "text/html;charset=utf-8" } });
+        let responseHTML = "";
+        if (url.pathname === "/terms") responseHTML = renderTermsHTML(CURRENT_ORIGIN);
+        else if (url.pathname === "/eula") responseHTML = renderEULAHTML(url.searchParams.get('redirect'), CURRENT_ORIGIN);
+        else if (isManagerSite) responseHTML = renderManagerHTML(CURRENT_ORIGIN);
+        else if (isSuperAdmin) responseHTML = renderSuperAdminHTML(CURRENT_ORIGIN);
+        else {
+            const id = url.searchParams.get('id');
+            if (!id) responseHTML = renderHomePage(CURRENT_ORIGIN);
+            else responseHTML = renderStudentHTML(CURRENT_ORIGIN);
+        }
+
+        // 注入防護腳本
+        const config = await getSystemConfig(env);
+        if (config.security_policy?.block_devtools && !isSuperAdmin) {
+            const antiDebugScript = `<script>(function(){document.addEventListener('contextmenu',e=>e.preventDefault());document.onkeydown=e=>{if(e.key==='F12'||e.keyCode===123||(e.ctrlKey&&e.shiftKey&&(e.key==='I'||e.key==='J'||e.key==='C'))||(e.ctrlKey&&e.key==='U')){e.preventDefault();return false;}};})();</script>`;
+            responseHTML = responseHTML.replace('</body>', `${antiDebugScript}</body>`);
+        }
+
+        return new Response(responseHTML, { headers: { "Content-Type": "text/html;charset=utf-8" } });
     }
 };
 
@@ -295,7 +295,16 @@ async function handlePost(request, env, ctx, origin) {
             return handleSuperAdminAction(action, json, env, ip, request);
         }
 
-        // ... (原有的管理員 API 保持不變) ...
+        const config = await getSystemConfig(env);
+        const beMaint = config.maintenance?.backend;
+        if (beMaint && beMaint.enabled === true) {
+            let isActive = true;
+            if (beMaint.end && beMaint.end.trim() !== "" && new Date(beMaint.end).getTime() < Date.now()) { isActive = false; }
+            if (isActive) {
+                return new Response(JSON.stringify({ status: "fail", msg: beMaint.message || "系統維護中，暫停服務。", maintenance: true }), { status: 503 });
+            }
+        }
+
         if (action === "admin_check_status") {
             const auth = await env.DB.prepare("SELECT * FROM group_auth WHERE group_id = ?").bind(groupId).first();
             if (!auth) return new Response(JSON.stringify({ status: "need_setup" }));
@@ -305,42 +314,12 @@ async function handlePost(request, env, ctx, origin) {
             let subjects = {}; try { subjects = JSON.parse(auth.科目設定 || '{}'); } catch(e){}
             return new Response(JSON.stringify({ status: "login", roles: roles, subjects: subjects, groupName: auth.群組名稱, advanced: adv }));
         }
+        // ... (其餘 API 保持不變，由 Part 3 接續) ...
+        // 請確保您已正確貼上 Part 3
 
-        if (action === "admin_login") {
-            const auth = await env.DB.prepare("SELECT * FROM group_auth WHERE group_id = ?").bind(groupId).first();
-            if(!auth) return new Response(JSON.stringify({ status: "fail", msg: "ID錯誤" }));
-            if (auth.status === 'terminated') return new Response(JSON.stringify({ status: "fail", msg: "服務已終止" }));
-            let roles = JSON.parse(auth.角色設定);
-            const role = roles[json.roleName];
-            if(!role) return new Response(JSON.stringify({ status: "fail", msg: "角色不存在" }));
-            let success = false, needsUpdate = false;
-            const inputPwd = (json.password || "").trim();
-            if (!role.hash || role.hash === "") success = true;
-            else if (role.hash.startsWith("pbkdf2$")) success = await verifyPassword(inputPwd, role.hash);
-            else { if (role.hash === await sha256(inputPwd)) { success = true; needsUpdate = true; } }
+// --- END OF PART 2 ---
 
-            if(success) {
-                if (needsUpdate && inputPwd) {
-                    role.hash = await hashPassword(inputPwd);
-                    roles[json.roleName] = role;
-                    await env.DB.prepare("UPDATE group_auth SET 角色設定 = ? WHERE group_id = ?").bind(JSON.stringify(roles), groupId).run();
-                }
-                if (json.roleName === "Administrator" || json.roleName === "總管理員") {
-                    if (!role.binding_code && !role.owner_line_id) {
-                        role.binding_code = Math.floor(1000 + Math.random() * 9000).toString();
-                        roles[json.roleName] = role;
-                        await env.DB.prepare("UPDATE group_auth SET 角色設定 = ? WHERE group_id = ?").bind(JSON.stringify(roles), groupId).run();
-                    }
-                }
-                let adv = {}; try { adv = JSON.parse(auth.advanced_settings || '{}'); } catch(e){}
-                let subjects = {}; try { subjects = JSON.parse(auth.科目設定); } catch(e){}
-                await writeLog(env, groupId, json.roleName, "登入成功", "", request);
-                return new Response(JSON.stringify({ status: "success", roleData: role, allRoles: roles, subjects: subjects, groupName: auth.群組名稱, advanced: adv }));
-            }
-            await writeLog(env, groupId, json.roleName, "登入失敗", "密碼錯誤", request);
-            return new Response(JSON.stringify({ status: "fail", msg: "密碼錯誤" }));
-        }
-
+// --- START OF PART 3 ---
         if (action === "update_settings") {
             const auth = await env.DB.prepare("SELECT * FROM group_auth WHERE group_id = ?").bind(groupId).first();
             let roles = JSON.parse(auth.角色設定 || '{}');
@@ -351,6 +330,12 @@ async function handlePost(request, env, ctx, origin) {
             if (!actor || (!isFullAdmin && !hasSettingsPerm)) return new Response(JSON.stringify({ status: "fail", msg: "權限不足" }));
 
             if(json.advancedSettings) {
+                if (json.advancedSettings.ai_enabled === true) {
+                    const policyRes = await env.DB.prepare("SELECT value FROM system_settings WHERE key = ?").bind(`policy:${groupId}`).first();
+                    let aiAllowed = true; 
+                    if (policyRes && policyRes.value) { try { aiAllowed = JSON.parse(policyRes.value).ai_allowed !== false; } catch(e){} }
+                    if (!aiAllowed) return new Response(JSON.stringify({ status: "fail", msg: "AI功能暫時無法使用，待功能開啟時才可使用" }));
+                }
                 let oldAdv = {}; try { oldAdv = JSON.parse(auth.advanced_settings || '{}'); } catch(e){}
                 const newAdv = { ...oldAdv, ...json.advancedSettings };
                 if (newAdv.periods) { for(let k in newAdv.periods) { if(!newAdv.periods[k]) delete newAdv.periods[k]; } }
@@ -368,6 +353,7 @@ async function handlePost(request, env, ctx, origin) {
                 const incomingRoles = json.settings.roles;
                 if (!incomingRoles["Administrator"] && roles["Administrator"]) incomingRoles["Administrator"] = roles["Administrator"];
                 if (!incomingRoles["總管理員"] && roles["總管理員"]) incomingRoles["總管理員"] = roles["總管理員"];
+
                 for (let [name, data] of Object.entries(incomingRoles)) {
                     if (!isFullAdmin) {
                         const newPerms = data.perm || [];
@@ -376,7 +362,7 @@ async function handlePost(request, env, ctx, origin) {
                     }
                     let hash = data.hash || roles[name]?.hash || "";
                     if (data.password && data.password.trim() !== "") hash = await hashPassword(data.password.trim());
-                    incomingRoles[name] = { ...data, hash: hash, perm: data.perm || [], subjects: data.subjects || [], rec: roles[name]?.rec || data.rec, owner_line_id: roles[name]?.owner_line_id || data.owner_line_id, binding_code: roles[name]?.binding_code || data.binding_code };
+                    incomingRoles[name] = { ...data, hash: hash, perm: data.perm || roles[name]?.perm || [], subjects: data.subjects || roles[name]?.subjects || [], rec: roles[name]?.rec || data.rec, owner_line_id: roles[name]?.owner_line_id || data.owner_line_id, binding_code: roles[name]?.binding_code || data.binding_code };
                     delete incomingRoles[name].password;
                 }
                 roles = incomingRoles;
@@ -403,7 +389,11 @@ async function handlePost(request, env, ctx, origin) {
             const hash = pwd ? await hashPassword(pwd) : "";
             const rescueCode = genRescueCode();
             const initialRoles = { "Administrator": { hash: hash, subjects: ["all"], perm: ["manage_roles", "manage_settings", "manage_tasks_full"], level: 99, rec: rescueCode } };
-            const defaultSubjects = JSON.stringify({ '國語': ['國文'], '英文': ['英文'], '數學': ['數學'] });
+            const defaultSubjects = JSON.stringify({ 
+                '國文': ['國文', '國語'], '英文': ['英文'], '數學': ['數學'], '地理': ['地理'], 
+                '歷史': ['歷史'], '公民': ['公民'], '理化': ['理化', '物理', '化學'], '生物': ['生物'], 
+                '地科': ['地科', '地球科學'], '資訊': ['資訊', '電腦'], '體育': ['體育'], '美術': ['美術'], '其他': [] 
+            });
             await env.DB.prepare("INSERT OR REPLACE INTO group_auth (group_id, 群組名稱, 角色設定, 科目設定, status, version) VALUES (?, ?, ?, ?, 'active', ?)").bind(groupId, json.groupName, JSON.stringify(initialRoles), defaultSubjects, CURRENT_VERSION).run();
             await writeLog(env, groupId, "System", "初始化群組", `Name: ${json.groupName}`, request);
             return new Response(JSON.stringify({ status: "success", recoveryCode: rescueCode }));
@@ -481,7 +471,7 @@ async function handlePost(request, env, ctx, origin) {
             return new Response(JSON.stringify({ status: "success" }));
         }
 
-// --- END OF PART 2 & 3 (MERGED FIX) ---
+// --- END OF PART 3 ---
 
 // --- START OF PART 4 ---
 
@@ -579,13 +569,19 @@ async function handleSuperAdminAction(action, json, env, ip, request) {
         return new Response(JSON.stringify({ status: "fail", msg: "密碼錯誤" }));
     }
 
-    // 驗證敏感操作密碼 (若有開啟)
+    // ★ 修復：敏感操作密碼驗證邏輯
     if (["super_admin_delete_group", "super_admin_reset_group_data"].includes(action)) {
         const config = await getSystemConfig(env);
         const secPolicy = config.security_policy || {};
-        if (secPolicy.require_password_for_destructive_actions) {
-            if (json.actionPassword !== secPolicy.action_password) {
-                return new Response(JSON.stringify({ status: "fail", msg: "操作密碼錯誤" }));
+        
+        // 只有在「已啟用」且「密碼不為空」時才檢查
+        if (secPolicy.require_password_for_destructive_actions === true) {
+            const serverSidePwd = (secPolicy.action_password || "").trim();
+            const clientSidePwd = (json.actionPassword || "").trim();
+            
+            if (serverSidePwd !== clientSidePwd) {
+                await writeLog(env, "System", "SuperAdmin", "敏感操作阻擋", `動作:${action} / 原因:密碼錯誤`, request);
+                return new Response(JSON.stringify({ status: "fail", msg: "操作密碼錯誤或未輸入" }));
             }
         }
     }
@@ -597,10 +593,7 @@ async function handleSuperAdminAction(action, json, env, ip, request) {
         const { results } = await env.DB.prepare("SELECT group_id, 群組名稱, 角色設定 FROM group_auth").all();
         const groups = results.map(g => {
             let roles = {}; 
-            let rescue = "無";        
-            let restore = "無";       
-            let isBound = false;
-            let hasPwd = false;
+            let rescue = "無", restore = "無", isBound = false, hasPwd = false;
             try { 
                 roles = JSON.parse(g.角色設定); 
                 const admin = roles["Administrator"] || roles["總管理員"];
@@ -616,17 +609,29 @@ async function handleSuperAdminAction(action, json, env, ip, request) {
         return new Response(JSON.stringify({ status: "success", config: config, groups: groups }));
     }
 
-    // ★ 更新全域設定 (合併 Maintenance, Creation Policy, Security Policy)
+    if (action === "super_admin_get_group_policy") {
+        const res = await env.DB.prepare("SELECT value FROM system_settings WHERE key = ?").bind(`policy:${json.targetGroupId}`).first();
+        const policy = res ? JSON.parse(res.value) : { ai_allowed: true }; 
+        return new Response(JSON.stringify({ status: "success", policy: policy }));
+    }
+
+    if (action === "super_admin_set_group_policy") {
+        const key = `policy:${json.targetGroupId}`;
+        const policy = { ai_allowed: json.ai_allowed };
+        await env.DB.prepare("INSERT INTO system_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at")
+            .bind(key, JSON.stringify(policy), Date.now()).run();
+        return new Response(JSON.stringify({ status: "success" }));
+    }
+
     if (action === "super_admin_save_settings") {
         const currentConfig = await getSystemConfig(env);
-        const newConfig = { ...currentConfig, ...json.settings }; // 合併更新
+        const newConfig = { ...currentConfig, ...json.settings };
         await env.DB.prepare("INSERT INTO system_settings (key, value, updated_at) VALUES ('system_config', ?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at")
             .bind(JSON.stringify(newConfig), Date.now()).run();
         await writeLog(env, "System", "SuperAdmin", "更新全域設定", "", request);
         return new Response(JSON.stringify({ status: "success" }));
     }
 
-    // (舊的 set_maintenance 保留以相容)
     if (action === "super_admin_set_maintenance") {
         const currentConfig = await getSystemConfig(env);
         currentConfig.maintenance = json.maintenance;
@@ -657,6 +662,7 @@ async function handleSuperAdminAction(action, json, env, ip, request) {
         await env.DB.prepare("DELETE FROM line_user_state WHERE group_id = ?").bind(gId).run();
         await env.DB.prepare("DELETE FROM group_agreements WHERE group_id = ?").bind(gId).run();
         await env.DB.prepare("DELETE FROM task_suggestions WHERE group_id = ?").bind(gId).run();
+        await env.DB.prepare("DELETE FROM system_settings WHERE key = ?").bind(`policy:${gId}`).run(); 
         await writeLog(env, "System", "SuperAdmin", "刪除群組", `Deleted ${gId}`, request);
         return new Response(JSON.stringify({ status: "success" })); 
     }
@@ -675,7 +681,6 @@ async function handleSuperAdminAction(action, json, env, ip, request) {
                  const oldRoles = JSON.parse(auth.角色設定); 
                  const oldAdmin = oldRoles["Administrator"] || oldRoles["總管理員"];
                  if (oldAdmin) {
-                     if(oldAdmin.hash) adminData.hash = oldAdmin.hash;
                      if(oldAdmin.rec) adminData.rec = oldAdmin.rec;
                      if(oldAdmin.binding_code) adminData.binding_code = oldAdmin.binding_code;
                      if(oldAdmin.owner_line_id) adminData.owner_line_id = oldAdmin.owner_line_id;
@@ -684,8 +689,15 @@ async function handleSuperAdminAction(action, json, env, ip, request) {
              } catch(e) {}
          }
          const newRoles = { "Administrator": adminData };
-         await env.DB.prepare("UPDATE group_auth SET 角色設定 = ?, is_locked = 0, status = 'active' WHERE group_id = ?").bind(JSON.stringify(newRoles), gId).run();
-         await writeLog(env, "System", "SuperAdmin", "重置群組狀態", `Reset ${gId}`, request);
+         const defaultSubjects = JSON.stringify({ 
+            '國文': ['國文', '國語'], '英文': ['英文'], '數學': ['數學'], '地理': ['地理'], 
+            '歷史': ['歷史'], '公民': ['公民'], '理化': ['理化', '物理', '化學'], '生物': ['生物'], 
+            '地科': ['地科', '地球科學'], '資訊': ['資訊', '電腦'], '體育': ['體育'], '美術': ['美術'], '其他': [] 
+         });
+         await env.DB.prepare("UPDATE group_auth SET 角色設定 = ?, 科目設定 = ?, advanced_settings = '{}', is_locked = 0, status = 'active' WHERE group_id = ?")
+            .bind(JSON.stringify(newRoles), defaultSubjects, gId).run();
+         
+         await writeLog(env, "System", "SuperAdmin", "重置群組狀態", `Reset ${gId} (Deep Clean)`, request);
          return new Response(JSON.stringify({ status: "success" }));
     }
 
@@ -696,9 +708,9 @@ async function handleSuperAdminAction(action, json, env, ip, request) {
         let roles = JSON.parse(auth.roles_json); 
         const adminKey = roles["Administrator"] ? "Administrator" : "總管理員";
         if(roles[adminKey]) { 
-            roles[adminKey].rec = genRescueCode();
+            roles[adminKey].restore_key = Math.random().toString(36).substring(2, 12);
             await env.DB.prepare("UPDATE group_auth SET 角色設定 = ? WHERE group_id = ?").bind(JSON.stringify(roles), gId).run(); 
-            return new Response(JSON.stringify({ status: "success", newRestoreCode: roles[adminKey].rec })); 
+            return new Response(JSON.stringify({ status: "success", newRestoreCode: roles[adminKey].restore_key })); 
         } 
         return new Response(JSON.stringify({ status: "fail" })); 
     }
@@ -852,7 +864,7 @@ for (const event of events) {
 
 // --- END OF PART 5 ---
 
-// --- START OF PART 6 (Fixed Logic & Brackets) ---
+// --- START OF PART 6 (Fix Agree & Allagree Logic) ---
 
 if (text === '/bot help') { 
     const helpMsg = `🤖 指令清單：\n🔹 /bot 學生：取得學生網址\n🔹 /bot 後台：取得後台網址\n🔹 /bot 復原碼：顯示復原碼 (限私訊)\n🔹 /bot ID：顯示群組 ID\n\n⚙️ 管理指令：\n/bind <4碼>：綁定管理員(限私訊)\n\n⚙️ 其他：\n/bot newID：生成新群組\n/bot <ID>：沿用舊設定\n/bot test：系統診斷(限管理員)\n/bot reboot：重啟服務`; 
@@ -860,11 +872,20 @@ if (text === '/bot help') {
     continue; 
 }
 
-// ★ 隱藏指令：/bot allagree (強制全員同意)
+// ★ 隱藏指令：/bot allagree (修復版 - 修正訊息換行)
 if (text === '/bot allagree' && gId) {
-    await env.DB.prepare("UPDATE group_auth SET is_locked = 0, locking_user_id = NULL, version = ? WHERE group_id = ?").bind(CURRENT_VERSION, gId).run();
-    await env.DB.prepare("UPDATE line_user_state SET state = 'setup_complete' WHERE group_id = ?").bind(gId).run();
-    ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, "㊙️ 隱藏指令生效：已強制全員同意條款，服務已解鎖。"));
+    await env.DB.prepare("INSERT OR IGNORE INTO group_auth (group_id) VALUES (?)").bind(gId).run();
+    await env.DB.prepare("UPDATE group_auth SET is_locked = 0, locking_user_id = NULL, version = ? WHERE group_id = ?").bind(TERMS_VERSION, gId).run();
+    
+    const check = await env.DB.prepare("SELECT 角色設定 FROM group_auth WHERE group_id = ?").bind(gId).first();
+    let setupMsg = "";
+    if (!check || !check.角色設定 || check.角色設定 === '{}') {
+        await env.DB.prepare("UPDATE line_user_state SET state = 'ready_for_setup' WHERE group_id = ?").bind(gId).run();
+        setupMsg = "\n請輸入 `/bot newID` (建立新群組) 或 `/bot <舊ID>` (沿用舊設定)。";
+    } else {
+        await env.DB.prepare("UPDATE line_user_state SET state = 'setup_complete' WHERE group_id = ?").bind(gId).run();
+    }
+    ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `㊙️ 隱藏指令生效：已強制全員同意條款，服務已解鎖。${setupMsg}`));
     continue;
 }
 
@@ -873,25 +894,22 @@ if (groupAuthPreCheck && groupAuthPreCheck.status === 'terminated') continue;
 
 let userState = await env.DB.prepare("SELECT * FROM line_user_state WHERE user_id = ? AND group_id = ?").bind(uId, gId).first();
 
-// 版本更新檢查
-if (groupAuthPreCheck && groupAuthPreCheck.version !== CURRENT_VERSION && userState?.state !== 'awaiting_agreement') {
+if (groupAuthPreCheck && groupAuthPreCheck.version !== TERMS_VERSION && userState?.state !== 'awaiting_agreement') {
     await env.DB.prepare("UPDATE group_auth SET is_locked = 1 WHERE group_id = ?").bind(gId).run();
     await env.DB.prepare("INSERT OR REPLACE INTO line_user_state (user_id, group_id, state) VALUES (?, ?, 'awaiting_agreement')").bind(uId, gId).run();
     await env.DB.prepare("DELETE FROM group_agreements WHERE group_id = ?").bind(gId).run();
-    ctx.waitUntil(replyLineMessageWithButton(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `🔄 【後端】服務版本已更新！\n為確保所有成員了解最新條款，請全體成員重新同意。\n\n${CHANGELOG}\n\n🟢 同意：/bot agree\n🔴 不同意：/bot disagree`, "我知道了", `${origin}/terms?ack=1`));
+    ctx.waitUntil(replyLineMessageWithButton(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `🔄 服務條款已更新 (${TERMS_VERSION})！\n為確保權益，請全體成員重新同意。\n\n${CHANGELOG}\n\n🟢 同意：/bot agree\n🔴 不同意：/bot disagree`, "閱讀條款", `${origin}/terms?ack=1`));
     continue;
 }
 
-// ★ /bot start
 if (text === '/bot start') {
     await env.DB.prepare("INSERT OR IGNORE INTO group_auth (group_id) VALUES (?)").bind(gId).run();
     let groupAuth = await env.DB.prepare("SELECT version FROM group_auth WHERE group_id = ?").bind(gId).first();
-    if (groupAuth && groupAuth.version && groupAuth.version !== CURRENT_VERSION) {
-        await env.DB.prepare("UPDATE group_auth SET version = ? WHERE group_id = ?").bind(CURRENT_VERSION, gId).run();
+    if (groupAuth && groupAuth.version && groupAuth.version !== TERMS_VERSION) {
+        await env.DB.prepare("UPDATE group_auth SET is_locked = 1 WHERE group_id = ?").bind(gId).run();
     }
     await env.DB.prepare("INSERT OR REPLACE INTO line_user_state (user_id, group_id, state) VALUES (?, ?, 'awaiting_agreement')").bind(uId, gId).run();
     await env.DB.prepare("DELETE FROM group_agreements WHERE group_id = ?").bind(gId).run(); 
-    
     const agreeMsg = `[條款版本: ${TERMS_VERSION}]\n請點擊連結閱讀條款，並依照以下指令操作：\n\n🟢 同意：請輸入 /bot agree\n🔴 不同意：請輸入 /bot disagree`;
     ctx.waitUntil(replyLineMessageWithButton(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, agreeMsg, "閱讀服務條款", `${origin}/terms`));
     continue; 
@@ -901,18 +919,17 @@ const hasAgreed = await env.DB.prepare("SELECT 1 FROM group_agreements WHERE gro
 const isGroupLocked = (groupAuthPreCheck && groupAuthPreCheck.is_locked === 1);
 let currentState = userState ? userState.state : (isGroupLocked && !hasAgreed ? 'awaiting_agreement' : 'setup_complete');
 
-// 狀態：等待同意
 if (currentState === 'awaiting_agreement') {
     if (text === '/bot agree') {
-        if (hasAgreed) continue; 
+        // ★ 修復：即使已同意，也允許再次觸發以檢查解鎖條件
         await env.DB.prepare("INSERT OR IGNORE INTO group_agreements (group_id, user_id) VALUES (?, ?)").bind(gId, uId).run();
-        const allAgreed = await checkAllAgreed(env, gId);
-        if (allAgreed) {
-            await env.DB.prepare("UPDATE group_auth SET is_locked = 0, locking_user_id = NULL, version = ? WHERE group_id = ?").bind(CURRENT_VERSION, gId).run();
+        
+        if(await checkAllAgreed(env, gId)) {
+            await env.DB.prepare("UPDATE group_auth SET is_locked = 0, locking_user_id = NULL, version = ? WHERE group_id = ?").bind(TERMS_VERSION, gId).run();
             const auth = await env.DB.prepare("SELECT 角色設定 FROM group_auth WHERE group_id = ?").bind(gId).first();
             if (!auth || !auth.角色設定 || auth.角色設定 === '{}') {
                  await env.DB.prepare("INSERT OR REPLACE INTO line_user_state (user_id, group_id, state) VALUES (?, ?, 'ready_for_setup')").bind(uId, gId).run();
-                 ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `✅ 全體成員皆已同意！\n請管理員輸入 \`/bot newID\` (建立新群組) 或 \`/bot <舊ID>\` (沿用舊設定)。`));
+                 ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `✅ 全體成員皆已同意！\n請輸入 \`/bot newID\` (建立新群組) 或 \`/bot <舊ID>\` (沿用舊設定)。`));
             } else {
                  await env.DB.prepare("UPDATE line_user_state SET state = 'setup_complete' WHERE group_id = ?").bind(gId).run();
                  ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `✅ 條款更新完畢，服務已恢復！\n${getExistingWelcomeMessage(gId, origin)}`));
@@ -926,25 +943,18 @@ if (currentState === 'awaiting_agreement') {
     continue;
 }
 
-// 狀態：準備設定 ID
 if (currentState === 'ready_for_setup') {
-    // ★ /bot newID (檢查 Creation Policy)
     if (text.startsWith('/bot newID')) {
         const sysConfig = await getSystemConfig(env);
         const policy = sysConfig.creation_policy || { mode: 'open', password: '' };
-        
         let allow = false;
         let errMsg = "";
-
-        if (policy.mode === 'closed') {
-            errMsg = "⛔ 系統目前禁止建立新群組。";
-        } else if (policy.mode === 'restricted') {
+        if (policy.mode === 'closed') errMsg = "⛔ 系統目前禁止建立新群組。";
+        else if (policy.mode === 'restricted') {
             const inputPwd = text.replace('/bot newID', '').trim();
             if (inputPwd === policy.password) allow = true;
             else errMsg = "🔒 此操作需要密碼，請輸入 /bot newID <密碼>";
-        } else {
-            allow = true; // open
-        }
+        } else allow = true;
 
         if (!allow) {
             ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, errMsg));
@@ -954,17 +964,21 @@ if (currentState === 'ready_for_setup') {
         const rescueCode = genRescueCode();
         const bindingCode = Math.floor(1000 + Math.random() * 9000).toString();
         const initialRoles = { "Administrator": { hash: "", subjects: ["all"], perm: ["manage_roles", "manage_settings", "manage_tasks_full"], level: 99, rec: rescueCode, binding_code: bindingCode } };
-        const defaultSubjects = JSON.stringify({ '國語': ['國文'], '英文': ['英文'], '數學': ['數學'] });
+        const defaultSubjects = JSON.stringify({ 
+            '國文': ['國文', '國語'], '英文': ['英文'], '數學': ['數學'], '地理': ['地理'], 
+            '歷史': ['歷史'], '公民': ['公民'], '理化': ['理化', '物理', '化學'], '生物': ['生物'], 
+            '地科': ['地科', '地球科學'], '資訊': ['資訊', '電腦'], '體育': ['體育'], '美術': ['美術'], '其他': [] 
+        });
+        
         const check = await env.DB.prepare("SELECT 角色設定 FROM group_auth WHERE group_id = ?").bind(gId).first();
         if (!check || !check.角色設定 || check.角色設定 === '{}') {
-             await env.DB.prepare("UPDATE group_auth SET 群組名稱 = ?, 角色設定 = ?, 科目設定 = ?, status = 'active', version = ?, is_locked = 0 WHERE group_id = ?").bind('未命名群組', JSON.stringify(initialRoles), defaultSubjects, CURRENT_VERSION, gId).run();
+             await env.DB.prepare("UPDATE group_auth SET 群組名稱 = ?, 角色設定 = ?, 科目設定 = ?, status = 'active', version = ?, is_locked = 0 WHERE group_id = ?").bind('未命名群組', JSON.stringify(initialRoles), defaultSubjects, TERMS_VERSION, gId).run();
         }
         await env.DB.prepare("INSERT OR REPLACE INTO line_user_state (user_id, group_id, state) VALUES (?, ?, 'setup_complete')").bind(uId, gId).run();
         ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, getNewWelcomeMessage(gId, origin)));
         continue;
     }
     
-    // 沿用舊 ID
     if (text.startsWith('/bot ') && text.length > 6) {
          const inputId = text.replace('/bot ', '').trim();
          const oldGroup = await env.DB.prepare("SELECT group_id FROM group_auth WHERE group_id = ?").bind(inputId).first();
@@ -1048,6 +1062,7 @@ if (!text.startsWith('/')) {
             try {
                 await env.DB.batch(batch);
                 await triggerDataUpdate(env, finalGid);
+                await writeLog(env, finalGid, "System", "AI判讀成功", `新增 ${tasks.length} 筆作業`, null);
             } catch (dbErr) {
                 await writeLog(env, finalGid, "System", "AI作業寫入失敗", dbErr.message, null);
             }
@@ -1235,305 +1250,329 @@ function renderHomePage(origin) {
 
 // --- END OF PART 7 ---
 
-// --- START OF PART 8 (Fix Logs Parsing & UI) ---
+// --- START OF PART 8 (Fix Frontend Pwd Sending) ---
 
-// 6. Super Admin 後台 (修復日誌顯示與功能)
+// 6. Super Admin 後台
 function renderSuperAdminHTML(origin) {
-    return `<!DOCTYPE html><html lang="zh-TW" class="dark"><head><meta charset="UTF-8"><title>Super Admin</title>${COMMON_UI_SCRIPT}</head>
-    <body class="bg-gray-900 text-white min-h-screen p-4 md:p-8">
-        <div class="max-w-5xl mx-auto space-y-8">
-            <h1 class="text-3xl font-bold text-blue-400 text-center tracking-wider">⚡ Super Admin v${CURRENT_VERSION}</h1>
-            <div id="login-box" class="bg-gray-800 p-8 rounded-2xl shadow-xl max-w-md mx-auto border border-gray-700">
-                <input type="password" id="spwd" placeholder="請輸入超級密碼" class="bg-gray-700 text-white border border-gray-600 p-4 rounded-xl w-full mb-6 text-center text-lg">
-                <button id="btn-login" class="w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-bold text-lg">驗證身分</button>
-            </div>
-            
-            <div id="control-panel" class="hidden space-y-8 animate-[fadeIn_0.5s_ease-out]">
-                <div class="flex justify-center gap-2 bg-gray-800/50 p-2 rounded-xl backdrop-blur max-w-2xl mx-auto overflow-x-auto">
-                    <button onclick="switchTab('maint')" class="tab-btn px-6 py-2 rounded-lg font-bold transition text-gray-400 hover:text-white" id="btn-tab-maint">🛡️ 維護</button>
-                    <button onclick="switchTab('groups')" class="tab-btn px-6 py-2 rounded-lg font-bold transition text-gray-400 hover:text-white" id="btn-tab-groups">👥 群組</button>
-                    <button onclick="switchTab('settings')" class="tab-btn px-6 py-2 rounded-lg font-bold transition text-gray-400 hover:text-white" id="btn-tab-settings">⚙️ 設定</button>
-                    <button onclick="switchTab('logs')" class="tab-btn px-6 py-2 rounded-lg font-bold transition text-gray-400 hover:text-white" id="btn-tab-logs">📜 日誌</button>
-                </div>
+    return `<!DOCTYPE html><html lang="zh-TW" class="dark"><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Super Admin</title>
+    ${COMMON_UI_SCRIPT}
+    <style>
+        html, body { height: 100%; margin: 0; padding: 0; background-color: #0f172a; color: #f8fafc; font-family: 'Segoe UI', Roboto, sans-serif; overflow: hidden; }
+        .input-dark { background: #1e293b; border: 1px solid #334155; color: white; border-radius: 0.5rem; padding: 0.75rem; width: 100%; font-size: 0.95rem; }
+        .input-dark:focus { border-color: #3b82f6; outline: none; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3); }
+        .btn { padding: 0.6rem 1.2rem; border-radius: 0.5rem; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; transition: 0.2s; border: none; }
+        .btn-primary { background: #2563eb; color: white; } .btn-primary:hover { background: #1d4ed8; }
+        .btn-danger { background: #dc2626; color: white; } .btn-danger:hover { background: #b91c1c; }
+        .btn-secondary { background: #334155; color: #e2e8f0; } .btn-secondary:hover { background: #475569; }
+        #layout { display: flex; flex-direction: column; height: 100%; }
+        .mobile-header { display: none; height: 60px; background: #1f2937; align-items: center; justify-content: space-between; padding: 0 1rem; border-bottom: 1px solid #374151; flex-shrink: 0; z-index: 50; }
+        .sidebar { width: 260px; background: #1f2937; border-right: 1px solid #374151; display: flex; flex-direction: column; z-index: 60; transition: transform 0.3s ease; flex-shrink: 0; }
+        .sidebar-link { padding: 1rem; color: #94a3b8; display: flex; align-items: center; cursor: pointer; border-left: 3px solid transparent; }
+        .sidebar-link:hover { background: #374151; color: white; }
+        .sidebar-link.active { background: #0f172a; color: #60a5fa; border-left-color: #60a5fa; }
+        .sidebar-link i { width: 24px; text-align: center; margin-right: 10px; }
+        .sidebar-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 55; display: none; backdrop-filter: blur(2px); }
+        .main { flex: 1; overflow-y: auto; padding: 1.5rem; background: #0f172a; position: relative; }
+        @media (min-width: 769px) { #layout { flex-direction: row; } .mobile-header { display: none; } .sidebar { position: static; height: 100%; transform: none !important; } .sidebar-overlay { display: none !important; } }
+        @media (max-width: 768px) { .mobile-header { display: flex; } .sidebar { position: fixed; top: 0; bottom: 0; left: 0; transform: translateX(-100%); width: 280px; box-shadow: 4px 0 15px rgba(0,0,0,0.5); } .sidebar.active { transform: translateX(0); } .sidebar-overlay.active { display: block; } .main { padding: 1rem; } }
+        .card { background: #1e293b; padding: 1rem; border-radius: 0.75rem; border: 1px solid #334155; margin-bottom: 1rem; }
+        details { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; margin-bottom: 1rem; overflow: hidden; }
+        details summary { padding: 1rem; cursor: pointer; background: #262f3e; font-weight: bold; }
+        .accordion-content { padding: 1rem; border-top: 1px solid #334155; background: #151e2e; }
+        .perm-row { display: flex; align-items: center; gap: 10px; padding: 10px; background: #0f172a; border-radius: 6px; border: 1px solid #334155; margin-bottom: 5px; cursor: pointer; }
+        .perm-checkbox { width: 18px; height: 18px; accent-color: #2563eb; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    </style>
+    </head><body>
 
+    <div id="login-container" class="fixed inset-0 z-[100] bg-gray-900 flex items-center justify-center p-4">
+        <div class="bg-gray-800 p-8 rounded-2xl shadow-xl max-w-md w-full border border-gray-700">
+            <h1 class="text-3xl font-bold text-blue-400 text-center mb-6">⚡ Super Admin</h1>
+            <input type="password" id="spwd" placeholder="請輸入超級密碼" class="input-dark text-center mb-6 text-lg">
+            <button id="btn-login" class="w-full btn btn-primary text-lg">驗證身分</button>
+        </div>
+    </div>
+
+    <div id="step-dash" class="hidden h-full">
+        <div id="layout">
+            <div class="mobile-header">
+                <button onclick="toggleSidebar()" class="text-white text-2xl"><i class="fas fa-bars"></i></button>
+                <span class="font-bold text-lg text-white">Super Admin</span>
+                <button onclick="logout()" class="text-red-400 text-lg"><i class="fas fa-sign-out-alt"></i></button>
+            </div>
+
+            <div id="sidebar-overlay" class="sidebar-overlay" onclick="toggleSidebar()"></div>
+            <aside id="sidebar" class="sidebar">
+                <div class="p-6 border-b border-gray-700 bg-gray-900/50">
+                    <div class="text-blue-400 text-xl font-bold mb-1"><i class="fas fa-bolt mr-2"></i>Control Panel</div>
+                    <div class="text-xs text-gray-500">v${CURRENT_VERSION}</div>
+                </div>
+                <nav class="flex-1 p-4 overflow-y-auto">
+                    <a onclick="switchTab('maint')" class="sidebar-link active" id="btn-tab-maint"><i class="fas fa-tools"></i> 維護模式</a>
+                    <a onclick="switchTab('groups')" class="sidebar-link" id="btn-tab-groups"><i class="fas fa-users"></i> 群組管理</a>
+                    <a onclick="switchTab('settings')" class="sidebar-link" id="btn-tab-settings"><i class="fas fa-cog"></i> 全域設定</a>
+                    <a onclick="switchTab('logs')" class="sidebar-link" id="btn-tab-logs"><i class="fas fa-history"></i> 系統日誌</a>
+                </nav>
+                <div class="p-4 border-t border-gray-700">
+                    <button onclick="logout()" class="btn btn-secondary w-full text-red-400 hover:text-white"><i class="fas fa-sign-out-alt mr-2"></i>登出</button>
+                </div>
+            </aside>
+
+            <main class="main">
                 <!-- 維護模式 -->
-                <div id="tab-maint" class="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-xl">
+                <div id="tab-maint" class="max-w-4xl mx-auto w-full">
                     <h2 class="text-2xl font-bold mb-6 flex items-center gap-2">全域維護模式</h2>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-                        <div class="bg-gray-900 p-6 rounded-xl border border-blue-900/50 relative">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                        <div class="bg-gray-800 p-6 rounded-xl border border-blue-900/50">
                             <h3 class="text-xl font-bold text-blue-400 mb-4">前端網頁</h3>
                             <div class="space-y-4">
                                 <label class="flex items-center gap-3"><input type="checkbox" id="fe-enabled" class="w-5 h-5 text-blue-600"> 啟用攔截</label>
-                                <select id="fe-type" class="w-full bg-gray-800 border border-gray-600 rounded-lg p-2">
-                                    <option value="sys_maint">系統維護中</option>
-                                    <option value="sys_update">系統升級中</option>
-                                    <option value="data_maint">資料維護中</option>
-                                    <option value="data_update">資料更新中</option>
-                                </select>
-                                <input type="text" id="fe-msg" class="w-full bg-gray-800 border border-gray-600 rounded-lg p-2" placeholder="公告訊息...">
-                                <input type="datetime-local" id="fe-end" class="w-full bg-gray-800 border border-gray-600 rounded-lg p-2 text-white">
+                                <select id="fe-type" class="input-dark"><option value="sys_maint">系統維護中</option><option value="sys_update">系統升級中</option><option value="data_maint">資料維護中</option><option value="data_update">資料更新中</option></select>
+                                <input type="text" id="fe-msg" class="input-dark" placeholder="公告訊息...">
+                                <input type="datetime-local" id="fe-end" class="input-dark text-white">
                             </div>
                         </div>
-                        <div class="bg-gray-900 p-6 rounded-xl border border-purple-900/50 relative">
+                        <div class="bg-gray-800 p-6 rounded-xl border border-purple-900/50">
                             <h3 class="text-xl font-bold text-purple-400 mb-4">後端 API</h3>
                             <div class="space-y-4">
                                 <label class="flex items-center gap-3"><input type="checkbox" id="be-enabled" class="w-5 h-5 text-purple-600"> 啟用阻擋</label>
-                                <select id="be-type" class="w-full bg-gray-800 border border-gray-600 rounded-lg p-2">
-                                    <option value="sys_maint">系統維護中</option>
-                                    <option value="sys_update">系統升級中</option>
-                                    <option value="data_maint">資料維護中</option>
-                                    <option value="data_update">資料更新中</option>
-                                </select>
-                                <input type="text" id="be-msg" class="w-full bg-gray-800 border border-gray-600 rounded-lg p-2" placeholder="錯誤訊息...">
-                                <input type="datetime-local" id="be-end" class="w-full bg-gray-800 border border-gray-600 rounded-lg p-2 text-white">
+                                <select id="be-type" class="input-dark"><option value="sys_maint">系統維護中</option><option value="sys_update">系統升級中</option><option value="data_maint">資料維護中</option><option value="data_update">資料更新中</option></select>
+                                <input type="text" id="be-msg" class="input-dark" placeholder="錯誤訊息...">
+                                <input type="datetime-local" id="be-end" class="input-dark text-white">
                             </div>
                         </div>
                     </div>
-                    <button onclick="saveMaint()" class="w-full mt-8 bg-green-600 hover:bg-green-500 text-white py-3 rounded-xl font-bold">儲存維護設定</button>
-                </div>
-
-                <!-- 系統設定 -->
-                <div id="tab-settings" class="hidden space-y-6">
-                    <div class="bg-gray-800 p-8 rounded-2xl border border-gray-700 shadow-xl">
-                        <h2 class="text-2xl font-bold mb-6">全域政策設定</h2>
-                        
-                        <!-- 1. 新增群組政策 -->
-                        <div class="mb-8 border-b border-gray-700 pb-6">
-                            <h3 class="text-lg font-bold text-yellow-400 mb-3">1. 新增群組權限 (/bot newID)</h3>
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <label class="block text-sm text-gray-400 mb-1">模式</label>
-                                    <select id="create-mode" class="w-full bg-gray-900 border border-gray-600 rounded p-2" onchange="toggleCreatePwd()">
-                                        <option value="open">🟢 開放 (任何人可建立)</option>
-                                        <option value="restricted">🔑 密碼保護 (需輸入密碼)</option>
-                                        <option value="closed">🔴 關閉 (禁止建立)</option>
-                                    </select>
-                                </div>
-                                <div id="create-pwd-box" class="hidden">
-                                    <label class="block text-sm text-gray-400 mb-1">自訂密碼</label>
-                                    <input type="text" id="create-pwd" class="w-full bg-gray-900 border border-gray-600 rounded p-2" placeholder="使用者需輸入此密碼">
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- 2. 敏感操作保護 -->
-                        <div>
-                            <h3 class="text-lg font-bold text-red-400 mb-3">2. 敏感操作保護 (刪除/重置群組)</h3>
-                            <label class="flex items-center gap-3 mb-3 cursor-pointer">
-                                <input type="checkbox" id="sec-enabled" class="w-5 h-5 text-red-600 rounded" onchange="toggleSecPwd()">
-                                <span>啟用操作密碼保護 (執行刪除/重置時需輸入)</span>
-                            </label>
-                            <div id="sec-pwd-box" class="hidden">
-                                <label class="block text-sm text-gray-400 mb-1">設定操作密碼</label>
-                                <input type="text" id="sec-pwd" class="w-full bg-gray-900 border border-gray-600 rounded p-2" placeholder="執行危險指令時需驗證此密碼">
-                            </div>
-                        </div>
-
-                        <button onclick="saveSettings()" class="w-full mt-8 bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-xl font-bold">儲存所有設定</button>
-                    </div>
+                    <button onclick="saveMaint()" class="w-full btn btn-primary py-3 text-lg">儲存維護設定</button>
                 </div>
 
                 <!-- 群組列表 -->
-                <div id="tab-groups" class="hidden space-y-6">
-                    <div class="bg-gray-800 p-6 rounded-xl border border-gray-700">
-                         <div class="flex justify-between items-center mb-4">
-                             <h2 class="text-xl font-bold">群組列表</h2>
-                             <button onclick="loadData()" class="text-sm bg-gray-700 px-3 py-1 rounded">重整</button>
-                         </div>
-                         <div class="flex gap-2 mb-4">
-                             <input type="text" id="skey" oninput="searchGroups()" placeholder="搜尋 ID / 名稱 / 救援碼" class="bg-gray-900 text-white border border-gray-600 p-2 rounded flex-1">
-                             <button onclick="searchGroups()" class="bg-blue-600 hover:bg-blue-500 text-white px-4 rounded font-bold">搜尋</button>
-                         </div>
-                         <div id="group-list" class="space-y-3"></div>
+                <div id="tab-groups" class="max-w-5xl mx-auto w-full hidden">
+                    <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
+                        <h2 class="text-2xl font-bold">群組管理</h2>
+                        <div class="flex gap-2 w-full md:w-auto">
+                            <input type="text" id="skey" oninput="searchGroups()" placeholder="搜尋 ID / 名稱..." class="input-dark flex-1 md:w-64">
+                            <button onclick="loadData()" class="btn btn-secondary"><i class="fas fa-sync-alt"></i></button>
+                        </div>
                     </div>
+                    <div id="group-list" class="space-y-4"></div>
                 </div>
 
-                <!-- 系統日誌 -->
-                <div id="tab-logs" class="hidden space-y-6">
-                    <div class="bg-gray-800 p-6 rounded-xl border border-gray-700">
-                         <div class="flex justify-between items-center mb-4">
-                             <h2 class="text-xl font-bold">系統日誌</h2>
-                             <div class="flex gap-2">
-                                 <button onclick="clearLogs()" class="text-sm bg-red-900 px-3 py-1 rounded hover:bg-red-700">清空所有日誌</button>
-                                 <button onclick="loadLogs()" class="text-sm bg-gray-700 px-3 py-1 rounded">重整</button>
-                             </div>
-                         </div>
-                         
-                         <div class="flex justify-center gap-4 mb-4 border-b border-gray-700 pb-2">
-                             <button onclick="changePage(-1)" class="bg-gray-700 px-4 py-1 rounded hover:bg-gray-600 text-sm">上一頁</button>
-                             <span class="py-1 page-num-display text-sm font-mono text-blue-300">Page 1</span>
-                             <button onclick="changePage(1)" class="bg-gray-700 px-4 py-1 rounded hover:bg-gray-600 text-sm">下一頁</button>
-                         </div>
-
-                         <div id="log-list" class="space-y-2 text-sm font-mono max-h-[600px] overflow-y-auto"></div>
-                         
-                         <div class="flex justify-center gap-4 mt-4 border-t border-gray-700 pt-2">
-                             <button onclick="changePage(-1)" class="bg-gray-700 px-4 py-2 rounded hover:bg-gray-600">上一頁</button>
-                             <span class="py-2 page-num-display font-mono text-blue-300">Page 1</span>
-                             <button onclick="changePage(1)" class="bg-gray-700 px-4 py-2 rounded hover:bg-gray-600">下一頁</button>
-                         </div>
+                <!-- 全域設定 -->
+                <div id="tab-settings" class="max-w-3xl mx-auto w-full hidden">
+                    <h2 class="text-2xl font-bold mb-6">全域政策設定</h2>
+                    <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 mb-6">
+                        <h3 class="text-lg font-bold text-yellow-400 mb-4">1. 新增群組權限 (/bot newID)</h3>
+                        <div class="space-y-4">
+                            <select id="create-mode" class="input-dark" onchange="toggleCreatePwd()"><option value="open">🟢 開放</option><option value="restricted">🔑 密碼保護</option><option value="closed">🔴 關閉</option></select>
+                            <div id="create-pwd-box" class="hidden"><input type="text" id="create-pwd" class="input-dark" placeholder="設定密碼..."></div>
+                        </div>
                     </div>
+                    <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 mb-6">
+                        <h3 class="text-lg font-bold text-red-400 mb-4">2. 敏感操作保護</h3>
+                        <label class="flex items-center gap-3 mb-4 cursor-pointer"><input type="checkbox" id="sec-enabled" class="w-5 h-5 text-red-600 rounded" onchange="toggleSecPwd()"><span>啟用操作密碼</span></label>
+                        <div id="sec-pwd-box" class="hidden"><input type="text" id="sec-pwd" class="input-dark" placeholder="設定操作密碼..."></div>
+                    </div>
+                    <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 mb-6">
+                        <h3 class="text-lg font-bold text-blue-400 mb-4">3. 安全防護</h3>
+                        <label class="flex items-center gap-3 cursor-pointer">
+                            <input type="checkbox" id="block-f12" class="w-5 h-5 text-blue-600 rounded">
+                            <span>🚫 禁用開發者工具 (F12/右鍵)</span>
+                        </label>
+                    </div>
+                    <button onclick="saveSettings()" class="w-full btn btn-primary py-3">儲存所有設定</button>
                 </div>
+
+                <!-- 日誌 -->
+                <div id="tab-logs" class="max-w-4xl mx-auto w-full hidden">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold">系統日誌</h2>
+                        <div class="flex gap-2">
+                            <button onclick="clearLogs()" class="btn btn-danger text-sm">清空</button>
+                            <button onclick="loadLogs()" class="btn btn-secondary text-sm">重整</button>
+                        </div>
+                    </div>
+                    <div class="flex justify-center gap-4 mb-4"><button onclick="changePage(-1)" class="btn btn-secondary text-sm">上一頁</button><span class="py-2 text-blue-300 font-mono page-num-display">Page 1</span><button onclick="changePage(1)" class="btn btn-secondary text-sm">下一頁</button></div>
+                    <div id="log-list" class="space-y-2 text-sm font-mono max-h-[60vh] overflow-y-auto custom-scroll"></div>
+                    <div class="flex justify-center gap-4 mt-4"><button onclick="changePage(-1)" class="btn btn-secondary text-sm">上一頁</button><span class="py-2 text-blue-300 font-mono page-num-display">Page 1</span><button onclick="changePage(1)" class="btn btn-secondary text-sm">下一頁</button></div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- 個別設定 Modal -->
+    <div id="modal-gset" class="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm hidden flex items-center justify-center p-4">
+        <div class="bg-gray-800 p-6 rounded-2xl w-full max-w-sm shadow-2xl border border-gray-700">
+            <h3 class="font-bold text-xl mb-4 text-white">個別群組設定</h3>
+            <input type="hidden" id="gset-id">
+            <label class="flex items-center gap-3 p-3 bg-gray-900 rounded border border-gray-600 cursor-pointer mb-6">
+                <input type="checkbox" id="gset-ai" class="w-5 h-5 text-blue-600 rounded">
+                <span class="text-gray-300">允許使用 AI 功能</span>
+            </label>
+            <div class="flex gap-3">
+                <button onclick="document.getElementById('modal-gset').classList.add('hidden')" class="flex-1 btn btn-secondary">取消</button>
+                <button onclick="saveGroupPolicy()" class="flex-1 btn btn-primary">儲存</button>
             </div>
         </div>
-        <script>
-            let currentConfig = {}, groups = [], curPage = 1;
-            document.addEventListener('DOMContentLoaded', () => { document.getElementById('btn-login').addEventListener('click', login); });
-            async function apiRequest(payload) {
-                payload.password = document.getElementById('spwd').value;
-                try { const res = await fetch(location.href, {method: 'POST', body: JSON.stringify(payload)}); return await res.json(); } catch (e) { return { status: 'error', msg: e.message }; }
-            }
-            async function login() {
-                const d = await apiRequest({action:'super_admin_login'});
-                if(d.status === 'success') { document.getElementById('login-box').classList.add('hidden'); document.getElementById('control-panel').classList.remove('hidden'); await loadData(); switchTab('maint'); } 
-                else alert(d.msg || '登入失敗');
-            }
-            async function loadData() {
-                const d = await apiRequest({action:'super_admin_get_data'});
-                if(d.status === 'success') { currentConfig = d.config || {}; groups = d.groups || []; loadConfigUI(); renderGroups(groups); }
-            }
-            function searchGroups() {
-                const k = document.getElementById('skey').value.toLowerCase().trim();
-                const filtered = groups.filter(g => g.id.includes(k) || (g.name && g.name.toLowerCase().includes(k)) || g.rescue_code.includes(k));
-                renderGroups(filtered);
-            }
+    </div>
 
-            // ★ 強化的日誌解析邏輯
-            async function loadLogs() {
-                const d = await apiRequest({action:'super_admin_get_logs', page: curPage, limit: 50});
-                if(d.status === 'success') {
-                    const div = document.getElementById('log-list'); div.innerHTML = '';
-                    d.logs.forEach(l => { 
-                        let details = l.details;
-                        // 嘗試解析 JSON 並轉換為中文
-                        try {
-                            if (details && details.trim().startsWith('{')) {
-                                const j = JSON.parse(details);
-                                // 1. 維護模式設定 (舊格式或直接設定)
-                                if (j.frontend && j.backend) {
-                                    const fe = j.frontend.enabled ? \`🔴\${j.frontend.type}\` : '🟢正常';
-                                    const be = j.backend.enabled ? \`🔴\${j.backend.type}\` : '🟢正常';
-                                    details = \`[維護] 前:\${fe} / 後:\${be}\`;
-                                }
-                                // 2. 全域設定 (包含維護與政策)
-                                else if (j.maintenance) {
-                                    const fe = j.maintenance.frontend?.enabled ? \`🔴\${j.maintenance.frontend.type}\` : '🟢正常';
-                                    const be = j.maintenance.backend?.enabled ? \`🔴\${j.maintenance.backend.type}\` : '🟢正常';
-                                    details = \`[全域設定] 維護狀態更新 (前:\${fe} / 後:\${be})\`;
-                                } 
-                                // 3. 成員/權限變更
-                                else if (j.roles) {
-                                    const count = Object.keys(j.roles).length;
-                                    details = \`[成員] 更新權限名單 (共\${count}人)\`;
-                                }
-                            }
-                        } catch(e) { /* 解析失敗則顯示原文 */ }
+    <!-- 敏感操作驗證 Modal -->
+    <div id="modal-auth" class="fixed inset-0 z-[200] bg-black/90 backdrop-blur-sm hidden flex items-center justify-center p-4">
+        <div class="bg-gray-900 p-6 rounded-2xl w-full max-w-sm shadow-2xl border border-red-500/50">
+            <div class="text-center mb-6">
+                <i class="fas fa-shield-alt text-4xl text-red-500 mb-4"></i>
+                <h3 class="font-bold text-xl text-white">敏感操作驗證</h3>
+                <p class="text-gray-400 text-sm mt-2">請輸入操作密碼以繼續</p>
+            </div>
+            <input type="password" id="auth-pwd-input" class="w-full bg-gray-800 border border-gray-600 rounded p-3 text-center text-white mb-6 focus:border-red-500 outline-none" placeholder="操作密碼">
+            <div class="flex gap-3">
+                <button id="btn-auth-cancel" class="flex-1 btn btn-secondary">取消</button>
+                <button id="btn-auth-confirm" class="flex-1 btn btn-danger">確認</button>
+            </div>
+        </div>
+    </div>
 
-                        // 顯示日誌條目
-                        div.innerHTML += \`<div class="p-2 bg-gray-900 rounded border border-gray-700 flex justify-between gap-2 hover:bg-gray-800 transition" title="\${l.details.replace(/"/g, '&quot;')}"><span class="text-blue-400 w-36 flex-shrink-0">\${new Date(l.timestamp).toLocaleString()}</span><span class="text-green-400 w-24 flex-shrink-0 truncate">\${l.actor}</span><span class="text-yellow-400 w-24 flex-shrink-0 truncate">\${l.action}</span><span class="text-gray-400 flex-1 truncate">\${details}</span></div>\`; 
-                    });
-                    document.querySelectorAll('.page-num-display').forEach(el => el.innerText = 'Page ' + curPage);
-                }
-            }
-            
-            async function clearLogs() { if(await myConfirm('確定清空所有日誌？(無法復原)')) { await apiRequest({action:'super_admin_clear_logs'}); loadLogs(); } }
-            function changePage(d) { if(curPage + d > 0) { curPage += d; loadLogs(); } }
-            
-            function loadConfigUI() {
-                const fe = currentConfig.maintenance?.frontend || {}, be = currentConfig.maintenance?.backend || {};
-                document.getElementById('fe-enabled').checked = fe.enabled; document.getElementById('fe-type').value = fe.type; document.getElementById('fe-msg').value = fe.message || ''; document.getElementById('fe-end').value = fe.end || '';
-                document.getElementById('be-enabled').checked = be.enabled; document.getElementById('be-type').value = be.type; document.getElementById('be-msg').value = be.message || ''; document.getElementById('be-end').value = be.end || '';
-                
-                const cp = currentConfig.creation_policy || {mode:'open', password:''};
-                document.getElementById('create-mode').value = cp.mode;
-                document.getElementById('create-pwd').value = cp.password || '';
-                toggleCreatePwd();
-
-                const sp = currentConfig.security_policy || {require_password_for_destructive_actions: false, action_password: ''};
-                document.getElementById('sec-enabled').checked = sp.require_password_for_destructive_actions;
-                document.getElementById('sec-pwd').value = sp.action_password || '';
-                toggleSecPwd();
-            }
-
-            function toggleCreatePwd() { document.getElementById('create-pwd-box').classList.toggle('hidden', document.getElementById('create-mode').value !== 'restricted'); }
-            function toggleSecPwd() { document.getElementById('sec-pwd-box').classList.toggle('hidden', !document.getElementById('sec-enabled').checked); }
-
-            function renderGroups(data) {
-                const div = document.getElementById('group-list'); div.innerHTML='';
-                const list = data || groups;
-                if(list.length === 0) { div.innerHTML = '<div class="text-gray-500 text-center py-4">無資料</div>'; return; }
-                list.forEach(g => {
-                    div.innerHTML += \`<div class="p-4 bg-gray-700/50 rounded-lg flex flex-col md:flex-row justify-between items-center gap-4 border border-gray-700">
-                        <div class="flex-1">
-                            <div class="font-bold text-lg">\${g.name} <span class="text-xs ml-2 px-1 rounded border \${g.is_bound?'text-green-400 border-green-400':'text-red-400 border-red-400'}">\${g.is_bound?'已綁定':'未綁定'}</span></div>
-                            <div class="text-xs text-gray-400 font-mono mt-1">\${g.id}</div>
-                            <div class="text-sm mt-2 flex flex-wrap gap-4">
-                                <span class="bg-gray-800 px-2 py-1 rounded">🆘 救援(6): <span class="text-yellow-400 font-mono select-all">\${g.rescue_code}</span></span>
-                                <span class="bg-gray-800 px-2 py-1 rounded">🔑 復原(10): <span class="text-blue-400 font-mono select-all">\${g.restore_code}</span></span>
-                            </div>
-                        </div>
-                        <div class="flex gap-2">
-                            <button onclick="safeAction('reset', '\${g.id}')" class="bg-orange-700 px-3 py-1 rounded text-xs hover:bg-orange-600 text-white">重置狀態</button>
-                            <button onclick="regenRestore('\${g.id}')" class="bg-yellow-700 px-3 py-1 rounded text-xs hover:bg-yellow-600 text-white">重置救援碼</button>
-                            <button onclick="safeAction('delete', '\${g.id}')" class="bg-red-900 px-3 py-1 rounded text-xs hover:bg-red-700 text-white">刪除</button>
-                        </div>
-                    </div>\`;
+    <script>
+        let currentConfig = {}, groups = [], curPage = 1;
+        document.addEventListener('DOMContentLoaded', () => { document.getElementById('btn-login').addEventListener('click', login); });
+        async function apiRequest(payload) {
+            payload.password = document.getElementById('spwd').value;
+            try { const res = await fetch(location.href, {method: 'POST', body: JSON.stringify(payload)}); return await res.json(); } catch (e) { return { status: 'error', msg: e.message }; }
+        }
+        async function login() {
+            const d = await apiRequest({action:'super_admin_login'});
+            if(d.status === 'success') { document.getElementById('login-container').classList.add('hidden'); document.getElementById('step-dash').classList.remove('hidden'); await loadData(); switchTab('maint'); } 
+            else alert(d.msg || '登入失敗');
+        }
+        async function loadData() {
+            const d = await apiRequest({action:'super_admin_get_data'});
+            if(d.status === 'success') { currentConfig = d.config || {}; groups = d.groups || []; loadConfigUI(); renderGroups(groups); }
+        }
+        function searchGroups() {
+            const k = document.getElementById('skey').value.toLowerCase().trim();
+            const filtered = groups.filter(g => g.id.includes(k) || (g.name && g.name.toLowerCase().includes(k)) || g.rescue_code.includes(k));
+            renderGroups(filtered);
+        }
+        async function loadLogs() {
+            const d = await apiRequest({action:'super_admin_get_logs', page: curPage, limit: 50});
+            if(d.status === 'success') {
+                const div = document.getElementById('log-list'); div.innerHTML = '';
+                d.logs.forEach(l => { 
+                    let details = l.details;
+                    try { if (details && details.trim().startsWith('{')) { const j = JSON.parse(details); if (j.frontend || j.backend) { const fe = j.frontend.enabled ? \`🔴\${j.frontend.type}\` : '🟢正常'; const be = j.backend.enabled ? \`🔴\${j.backend.type}\` : '🟢正常'; details = \`[維護] 前:\${fe} / 後:\${be}\`; } else if (j.roles) { details = '成員設定變更'; } } } catch(e) {}
+                    div.innerHTML += \`<div class="p-3 bg-gray-800 rounded border border-gray-700 flex flex-col md:flex-row justify-between gap-2 text-xs md:text-sm"><span class="text-blue-400 md:w-40">\${new Date(l.timestamp).toLocaleString()}</span><div class="flex gap-2 md:w-48"><span class="text-green-400 font-bold">\${l.actor}</span><span class="text-yellow-500">\${l.action}</span></div><span class="text-gray-400 flex-1 truncate">\${details}</span></div>\`; 
                 });
+                document.querySelectorAll('.page-num-display').forEach(el => el.innerText = 'Page ' + curPage);
             }
+        }
+        async function clearLogs() { if(await myConfirm('確定清空所有日誌？')) { await apiRequest({action:'super_admin_clear_logs'}); loadLogs(); } }
+        function changePage(d) { if(curPage + d > 0) { curPage += d; loadLogs(); } }
+        
+        function loadConfigUI() {
+            const fe = currentConfig.maintenance?.frontend || {}, be = currentConfig.maintenance?.backend || {};
+            document.getElementById('fe-enabled').checked = fe.enabled; document.getElementById('fe-type').value = fe.type; document.getElementById('fe-msg').value = fe.message || ''; document.getElementById('fe-end').value = fe.end || '';
+            document.getElementById('be-enabled').checked = be.enabled; document.getElementById('be-type').value = be.type; document.getElementById('be-msg').value = be.message || ''; document.getElementById('be-end').value = be.end || '';
+            const cp = currentConfig.creation_policy || {mode:'open', password:''};
+            document.getElementById('create-mode').value = cp.mode; document.getElementById('create-pwd').value = cp.password || ''; toggleCreatePwd();
+            const sp = currentConfig.security_policy || {require_password_for_destructive_actions: false, action_password: ''};
+            document.getElementById('sec-enabled').checked = sp.require_password_for_destructive_actions; document.getElementById('sec-pwd').value = sp.action_password || ''; toggleSecPwd();
+            document.getElementById('block-f12').checked = !!(currentConfig.security_policy && currentConfig.security_policy.block_devtools);
+        }
+        function toggleCreatePwd() { document.getElementById('create-pwd-box').classList.toggle('hidden', document.getElementById('create-mode').value !== 'restricted'); }
+        function toggleSecPwd() { document.getElementById('sec-pwd-box').classList.toggle('hidden', !document.getElementById('sec-enabled').checked); }
+        
+        function renderGroups(data) {
+            const div = document.getElementById('group-list'); div.innerHTML='';
+            const list = data || groups;
+            if(list.length === 0) { div.innerHTML = '<div class="text-gray-500 text-center py-8">無資料</div>'; return; }
+            list.forEach(g => {
+                div.innerHTML += \`<div class="bg-gray-800 p-4 rounded-xl border border-gray-700 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                    <div class="flex-1 overflow-hidden w-full">
+                        <div class="font-bold text-lg text-white truncate mb-1">\${g.name} <span class="text-xs ml-2 px-2 py-0.5 rounded border \${g.is_bound?'text-green-400 border-green-400 bg-green-400/10':'text-red-400 border-red-400 bg-red-400/10'}">\${g.is_bound?'已綁定':'未綁定'}</span></div>
+                        <div class="text-xs text-gray-500 font-mono mb-2">\${g.id}</div>
+                        <div class="flex flex-wrap gap-2 text-sm">
+                            <span class="bg-gray-900 px-2 py-1 rounded text-yellow-500 border border-yellow-500/30">🆘 \${g.rescue_code}</span>
+                            <span class="bg-gray-900 px-2 py-1 rounded text-blue-400 border border-blue-500/30">🔑 \${g.restore_code}</span>
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap gap-2 w-full md:w-auto">
+                        <button onclick="openGroupSettings('\${g.id}')" class="btn btn-secondary text-sm flex-1 md:flex-none"><i class="fas fa-cog"></i> 設定</button>
+                        <button onclick="safeAction('reset', '\${g.id}')" class="btn btn-secondary text-sm text-orange-400 flex-1 md:flex-none"><i class="fas fa-undo"></i> 重置</button>
+                        <button onclick="regenRestore('\${g.id}')" class="btn btn-secondary text-sm text-yellow-400 flex-1 md:flex-none"><i class="fas fa-key"></i> 換碼</button>
+                        <button onclick="safeAction('delete', '\${g.id}')" class="btn btn-secondary text-sm text-red-400 flex-1 md:flex-none"><i class="fas fa-trash"></i> 刪除</button>
+                    </div>
+                </div>\`;
+            });
+        }
 
-            async function safeAction(type, id) {
-                const secEnabled = document.getElementById('sec-enabled').checked;
-                let pwd = null;
-                
-                if (secEnabled) {
-                    pwd = prompt("⚠️ 此為敏感操作，請輸入「操作密碼」驗證：");
-                    if (!pwd) return;
+        async function openGroupSettings(id) {
+            document.getElementById('gset-id').value = id;
+            document.getElementById('modal-gset').classList.remove('hidden');
+            document.getElementById('gset-ai').checked = true; 
+            const d = await apiRequest({action:'super_admin_get_group_policy', targetGroupId: id});
+            if(d.status === 'success' && d.policy) { document.getElementById('gset-ai').checked = d.policy.ai_allowed !== false; }
+        }
+        async function saveGroupPolicy() {
+            const id = document.getElementById('gset-id').value;
+            const allowed = document.getElementById('gset-ai').checked;
+            await apiRequest({action:'super_admin_set_group_policy', targetGroupId: id, ai_allowed: allowed});
+            document.getElementById('modal-gset').classList.add('hidden');
+            successAlert('設定已更新');
+        }
+        
+        function showAuthModal() {
+            return new Promise((resolve) => {
+                const modal = document.getElementById('modal-auth');
+                const input = document.getElementById('auth-pwd-input');
+                const btnOk = document.getElementById('btn-auth-confirm');
+                const btnCancel = document.getElementById('btn-auth-cancel');
+                input.value = ''; modal.classList.remove('hidden'); input.focus();
+                const close = (val) => { modal.classList.add('hidden'); resolve(val); };
+                btnOk.onclick = () => close(input.value);
+                btnCancel.onclick = () => close(null);
+                input.onkeydown = (e) => { if(e.key === 'Enter') close(input.value); };
+            });
+        }
+
+        async function safeAction(type, id) {
+            const secEnabled = document.getElementById('sec-enabled').checked;
+            let pwd = null;
+            if (secEnabled) { pwd = await showAuthModal(); if (pwd === null) return; }
+            if (type === 'delete') { if(!await myConfirm('確定刪除此群組？(無法復原)')) return; await apiRequest({action:'super_admin_delete_group', targetGroupId:id, actionPassword: pwd}); } 
+            else if (type === 'reset') { if(!await myConfirm('確定重置狀態？(清空作業但保留管理員)')) return; await apiRequest({action:'super_admin_reset_group_data', targetGroupId:id, actionPassword: pwd}); }
+            loadData();
+        }
+        
+        // ★ 修復：saveMaint
+        async function saveMaint() {
+            const newMaint = { frontend: { enabled: document.getElementById('fe-enabled').checked, type: document.getElementById('fe-type').value, message: document.getElementById('fe-msg').value, end: document.getElementById('fe-end').value }, backend: { enabled: document.getElementById('be-enabled').checked, type: document.getElementById('be-type').value, message: document.getElementById('be-msg').value, end: document.getElementById('be-end').value } };
+            await apiRequest({ action:'super_admin_set_maintenance', maintenance: newMaint }); successAlert('維護設定已儲存');
+        }
+        
+        async function saveSettings() {
+            const settings = {
+                maintenance: { frontend: { enabled: document.getElementById('fe-enabled').checked, type: document.getElementById('fe-type').value, message: document.getElementById('fe-msg').value, end: document.getElementById('fe-end').value }, backend: { enabled: document.getElementById('be-enabled').checked, type: document.getElementById('be-type').value, message: document.getElementById('be-msg').value, end: document.getElementById('be-end').value } },
+                creation_policy: { mode: document.getElementById('create-mode').value, password: document.getElementById('create-pwd').value },
+                security_policy: { 
+                    require_password_for_destructive_actions: document.getElementById('sec-enabled').checked, 
+                    action_password: document.getElementById('sec-pwd').value,
+                    block_devtools: document.getElementById('block-f12').checked
                 }
-
-                if (type === 'delete') {
-                    if(!await myConfirm('確定刪除此群組？(無法復原)')) return;
-                    await apiRequest({action:'super_admin_delete_group', targetGroupId:id, actionPassword: pwd});
-                } else if (type === 'reset') {
-                    if(!await myConfirm('確定重置狀態？(清空作業但保留管理員)')) return;
-                    await apiRequest({action:'super_admin_reset_group_data', targetGroupId:id, actionPassword: pwd});
-                }
-                loadData();
-            }
-
-            async function saveSettings() {
-                const settings = {
-                    maintenance: { 
-                        frontend: { enabled: document.getElementById('fe-enabled').checked, type: document.getElementById('fe-type').value, message: document.getElementById('fe-msg').value, end: document.getElementById('fe-end').value }, 
-                        backend: { enabled: document.getElementById('be-enabled').checked, type: document.getElementById('be-type').value, message: document.getElementById('be-msg').value, end: document.getElementById('be-end').value } 
-                    },
-                    creation_policy: {
-                        mode: document.getElementById('create-mode').value,
-                        password: document.getElementById('create-pwd').value
-                    },
-                    security_policy: {
-                        require_password_for_destructive_actions: document.getElementById('sec-enabled').checked,
-                        action_password: document.getElementById('sec-pwd').value
-                    }
-                };
-                await apiRequest({ action:'super_admin_save_settings', settings: settings }); 
-                alert('所有設定已儲存');
-            }
-
-            async function regenRestore(id) { 
-                if(await myConfirm('確定重置 6位數 救援碼？')) { 
-                    const d = await apiRequest({action:'super_admin_regen_restore', targetGroupId:id}); 
-                    if(d.status === 'success') { alert('新碼: ' + d.newRestoreCode); loadData(); } else alert(d.msg); 
-                } 
-            }
-
-            function switchTab(id) {
-                document.querySelectorAll('.tab-btn').forEach(b => { b.classList.remove('bg-blue-600', 'text-white'); b.classList.add('text-gray-400'); });
-                document.querySelectorAll('#control-panel > div[id^="tab-"]').forEach(d => d.classList.add('hidden'));
-                document.getElementById('tab-'+id).classList.remove('hidden');
-                document.getElementById('btn-tab-'+id).classList.add('bg-blue-600', 'text-white');
-                if(id === 'logs') loadLogs();
-            }
-        </script></body></html>`;
+            };
+            await apiRequest({ action:'super_admin_save_settings', settings: settings }); successAlert('所有設定已儲存');
+        }
+        async function regenRestore(id) { if(await myConfirm('確定重置 10位數 復原碼？')) { const d = await apiRequest({action:'super_admin_regen_restore', targetGroupId:id}); if(d.status === 'success') { alert('新碼: ' + d.newRestoreCode); loadData(); } else alert(d.msg); } }
+        
+        window.toggleSidebar = () => { document.getElementById('sidebar').classList.toggle('active'); document.getElementById('sidebar-overlay').classList.toggle('active'); };
+        function switchTab(id) {
+            document.querySelectorAll('.sidebar-link').forEach(l => l.classList.remove('active'));
+            document.getElementById('btn-tab-'+id).classList.add('active');
+            document.querySelectorAll('#step-dash > #layout > main > div[id^="tab-"]').forEach(d => d.classList.add('hidden'));
+            document.getElementById('tab-'+id).classList.remove('hidden');
+            if(window.innerWidth < 768) toggleSidebar();
+            if(id === 'logs') loadLogs();
+        }
+    </script></body></html>`;
 }
 
 // --- END OF PART 8 ---
@@ -1620,9 +1659,8 @@ function renderStudentHTML(origin) {
 
 // --- END OF PART 9 ---
 
-// --- START OF PART 10 (Sidebar UI Fixes) ---
+// --- START OF PART 10 (Fix Sidebar Alignment, Eye Icon & Disabled Inputs) ---
 
-// 8. 後台管理頁面
 function renderManagerHTML(origin) {
     return `<!DOCTYPE html><html lang="zh-TW"><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>後台管理</title>
     ${COMMON_UI_SCRIPT}
@@ -1630,6 +1668,7 @@ function renderManagerHTML(origin) {
         html, body { height: 100%; margin: 0; padding: 0; background-color: #0f172a; color: #f8fafc; font-family: 'Segoe UI', Roboto, sans-serif; overflow: hidden; }
         .input-dark { background: #1e293b; border: 1px solid #334155; color: white; border-radius: 0.5rem; padding: 0.75rem; width: 100%; font-size: 0.95rem; }
         .input-dark:focus { border-color: #3b82f6; outline: none; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3); }
+        .input-dark:disabled { opacity: 0.5; cursor: not-allowed; background: #111827; }
         .btn { padding: 0.6rem 1.2rem; border-radius: 0.5rem; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; transition: 0.2s; border: none; }
         .btn-primary { background: #2563eb; color: white; } .btn-primary:hover { background: #1d4ed8; }
         .btn-danger { background: #dc2626; color: white; } .btn-danger:hover { background: #b91c1c; }
@@ -1643,21 +1682,9 @@ function renderManagerHTML(origin) {
         .sidebar-link i { width: 24px; text-align: center; margin-right: 10px; }
         .sidebar-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 55; display: none; backdrop-filter: blur(2px); }
         .main { flex: 1; overflow-y: auto; padding: 1.5rem; background: #0f172a; position: relative; }
-        @media (min-width: 769px) {
-            #step-dash { flex-direction: row; }
-            .mobile-header { display: none; }
-            .sidebar { position: static; height: 100%; transform: none !important; }
-            .sidebar-overlay { display: none !important; }
-        }
-        @media (max-width: 768px) {
-            .mobile-header { display: flex; }
-            .sidebar { position: fixed; top: 0; bottom: 0; left: 0; transform: translateX(-100%); width: 280px; box-shadow: 4px 0 15px rgba(0,0,0,0.5); }
-            .sidebar.active { transform: translateX(0); }
-            .sidebar-overlay.active { display: block; }
-            .main { padding: 1rem; }
-        }
+        @media (min-width: 769px) { #step-dash { flex-direction: row; } .mobile-header { display: none; } .sidebar { position: static; height: 100%; transform: none !important; } .sidebar-overlay { display: none !important; } }
+        @media (max-width: 768px) { .mobile-header { display: flex; } .sidebar { position: fixed; top: 0; bottom: 0; left: 0; transform: translateX(-100%); width: 280px; box-shadow: 4px 0 15px rgba(0,0,0,0.5); } .sidebar.active { transform: translateX(0); } .sidebar-overlay.active { display: block; } .main { padding: 1rem; } }
         .card { background: #1e293b; padding: 1rem; border-radius: 0.75rem; border: 1px solid #334155; margin-bottom: 1rem; }
-        .avatar-circle { width: 42px; height: 42px; border-radius: 50%; background: rgba(59, 130, 246, 0.1); color: #60a5fa; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; border: 1px solid rgba(59, 130, 246, 0.2); }
         details { background: #1e293b; border: 1px solid #334155; border-radius: 0.5rem; margin-bottom: 1rem; overflow: hidden; }
         details summary { padding: 1rem; cursor: pointer; background: #262f3e; font-weight: bold; }
         .accordion-content { padding: 1rem; border-top: 1px solid #334155; background: #151e2e; }
@@ -1702,21 +1729,22 @@ function renderManagerHTML(origin) {
                 <div class="text-xs text-gray-400 bg-gray-800 p-2 rounded mb-1 font-mono truncate" id="dash-group-name"></div>
                 <div class="text-xs text-green-400 font-bold">身分: <span id="role-display"></span></div>
                 
-                <!-- ★修復：救援碼顯示優化 -->
-                <div id="rescue-code-area" class="mt-2 hidden">
+                <!-- ★ 修復：代碼對齊與眼睛切換 -->
+                <div id="rescue-code-area" class="mt-3 hidden">
                     <div class="flex items-center gap-2 bg-yellow-900/20 p-2 rounded border border-yellow-700/30">
-                        <i class="fas fa-key text-yellow-500 text-xs"></i>
-                        <span class="text-xs text-yellow-500 font-bold">救援碼:</span>
-                        <span id="rec-code" class="text-xs font-mono text-yellow-400 blur-sm cursor-pointer select-all" onclick="this.classList.toggle('blur-sm')">******</span>
+                        <i class="fas fa-key text-yellow-500 text-xs w-4 text-center"></i>
+                        <span class="text-xs text-yellow-500 font-bold w-12">救援碼:</span>
+                        <span id="rec-code" class="text-xs font-mono text-yellow-400 blur-sm flex-1 select-all">******</span>
+                        <i class="fas fa-eye text-gray-500 cursor-pointer text-xs hover:text-white" onclick="toggleBlur('rec-code')"></i>
                     </div>
                 </div>
                 
-                <!-- ★修復：綁定碼顯示與模糊處理 -->
                 <div id="binding-code-area" class="mt-2 hidden">
                     <div class="flex items-center gap-2 bg-blue-900/20 p-2 rounded border border-blue-700/30">
-                        <i class="fas fa-link text-blue-500 text-xs"></i>
-                        <span class="text-xs text-blue-300 font-bold">綁定碼:</span>
-                        <span id="bind-code" class="text-xs font-mono text-blue-400 font-bold blur-sm cursor-pointer select-all" onclick="this.classList.toggle('blur-sm')"></span>
+                        <i class="fas fa-link text-blue-500 text-xs w-4 text-center"></i>
+                        <span class="text-xs text-blue-300 font-bold w-12">綁定碼:</span>
+                        <span id="bind-code" class="text-xs font-mono text-blue-400 font-bold blur-sm flex-1 select-all"></span>
+                        <i class="fas fa-eye text-gray-500 cursor-pointer text-xs hover:text-white" onclick="toggleBlur('bind-code')"></i>
                     </div>
                 </div>
             </div>
@@ -1755,10 +1783,10 @@ function renderManagerHTML(origin) {
                 <div id="task-list" class="space-y-4 pb-10"></div>
             </div>
 
-            <!-- 2. 系統設定 -->
+            <!-- 2. 系統設定 (★ 預設收起) -->
             <div id="view-settings" class="max-w-3xl mx-auto w-full hidden">
                 <div class="border-b border-gray-700 pb-4 mb-6"><h2 class="text-2xl font-bold">系統設定</h2></div>
-                <details open><summary class="text-blue-400">⏰ 節次與時間</summary>
+                <details><summary class="text-blue-400">⏰ 節次與時間</summary>
                     <div class="accordion-content">
                         <div class="bg-blue-900/20 p-3 rounded mb-4 text-xs text-blue-200 border border-blue-500/30">設定「第一節」對應上課，「第一節下課」對應下課時間。</div>
                         <div id="period-list" class="space-y-3 mb-4"></div>
@@ -1846,6 +1874,9 @@ function renderManagerHTML(origin) {
         document.getElementById('sidebar').classList.toggle('active'); 
         document.getElementById('sidebar-overlay').classList.toggle('active'); 
     };
+    // ★ 眼睛切換函式
+    window.toggleBlur = (id) => { document.getElementById(id).classList.toggle('blur-sm'); };
+
     window.switchView = (v) => {
         ['tasks','settings','members'].forEach(id=>document.getElementById('view-'+id).classList.add('hidden'));
         document.getElementById('view-'+v).classList.remove('hidden');
@@ -1885,11 +1916,12 @@ function renderManagerHTML(origin) {
             document.getElementById('role-display').innerText = selectedRole;
             myRoleData = d.roleData;
             
-            // ★ 修復：若有綁定碼則顯示並支援模糊
+            // 綁定碼 (預設模糊)
             if(d.roleData.binding_code) { 
                 document.getElementById('binding-code-area').classList.remove('hidden'); 
                 document.getElementById('bind-code').innerText = d.roleData.binding_code; 
             }
+            // 救援碼 (預設模糊)
             if(d.roleData.rec) { 
                 document.getElementById('rescue-code-area').classList.remove('hidden'); 
                 document.getElementById('rec-code').innerText = d.roleData.rec; 
@@ -1911,14 +1943,12 @@ function renderManagerHTML(origin) {
     };
 
     function renderAll() {
-        // Periods
         const pd = document.getElementById('period-list'); pd.innerHTML='';
         Object.keys(periods).sort((a,b)=>parseInt(a)-parseInt(b)).forEach(k => {
             const p=periods[k]||{};
             pd.innerHTML += \`<div class="bg-gray-800 p-3 rounded-lg flex flex-col md:flex-row gap-3 items-center border border-gray-700 shadow-sm"><span class="font-bold text-blue-300 w-16 text-center bg-gray-900 rounded py-1">第 \${k} 節</span><div class="flex flex-1 gap-4"><label class="flex-1 text-xs text-gray-500 font-bold block">上課 <input type="time" value="\${p.start}" onchange="periods[\${k}].start=this.value" class="input-dark mt-1 py-1 text-center bg-gray-900"></label><label class="flex-1 text-xs text-gray-500 font-bold block">下課 <input type="time" value="\${p.end}" onchange="periods[\${k}].end=this.value" class="input-dark mt-1 py-1 text-center bg-gray-900"></label></div><button onclick="removePeriod('\${k}')" class="text-red-400 hover:bg-red-900/30 p-2 rounded-lg transition" title="刪除"><i class="fas fa-trash"></i></button></div>\`;
         });
         
-        // Subjects
         const sd = document.getElementById('subject-list'); sd.innerHTML='';
         const sel = document.getElementById('add-sub'); sel.innerHTML='<option value="">請選擇科目...</option>';
         const fs = document.getElementById('f-sb'); fs.innerHTML='<option value="all">📚 科目: 全部</option>';
@@ -1929,7 +1959,6 @@ function renderManagerHTML(origin) {
             sel.innerHTML += \`<option value="\${s}">\${s}</option>\`; fs.innerHTML += \`<option value="\${s}">\${s}</option>\`;
         });
         
-        // Roles
         const rd = document.getElementById('role-list'); rd.innerHTML='';
         Object.keys(roles).forEach(r => {
             const isAdmin = (r === 'Administrator');
@@ -1941,7 +1970,6 @@ function renderManagerHTML(origin) {
             rd.innerHTML += \`<div class="card flex justify-between items-center"><div class="flex items-center gap-4"><div class="avatar-circle">\${avatar}</div><div><div class="font-bold text-lg text-white">\${r}</div><div class="text-xs text-gray-500">權限: \${(roles[r].perm||[]).length} 項</div></div></div><div class="flex gap-2"><button onclick="openRoleModal('\${r}')" class="btn btn-secondary text-xs px-3 py-1">編輯</button>\${delBtn}</div></div>\`;
         });
         
-        // Advanced
         if(advanced) {
             document.getElementById('adv-approval-mode').value = advanced.approval_mode || 'manual';
             document.getElementById('adv-ai-enabled').checked = advanced.ai_enabled || false;
@@ -1949,7 +1977,6 @@ function renderManagerHTML(origin) {
         }
     }
 
-    // Settings & Subjects
     window.saveAllSettings = async () => {
         try {
             const newSub = {};
@@ -1980,32 +2007,36 @@ function renderManagerHTML(origin) {
         document.getElementById('subject-list').insertAdjacentHTML('beforeend', html);
     };
 
-    // Role Logic
     window.openRoleModal = (n='') => {
         openModal('role'); document.getElementById('r-name').value = n; document.getElementById('r-pwd').value = '';
         document.querySelectorAll('.role-perm').forEach(c=>c.checked=false);
         const c=document.getElementById('r-subs'); c.innerHTML='<label class="perm-row"><input type="checkbox" value="all" class="r-sub perm-checkbox"> <span>🌟 全科 (All)</span></label>';
         Object.keys(subjects).forEach(s => c.innerHTML+=\`<label class="perm-row"><input type="checkbox" value="\${s}" class="r-sub perm-checkbox"> <span>\${s}</span></label>\`);
+        
         const isSelf = (n === selectedRole);
-        if(n && roles[n]) {
-            (roles[n].perm||[]).forEach(p=>{ const el=document.querySelector(\`.role-perm[value="\${p}"]\`); if(el) { el.checked=true; if(isSelf) el.disabled=true; } });
-            (roles[n].subjects||[]).forEach(s=>{ const el=document.querySelector(\`.r-sub[value="\${s}"]\`); if(el) { el.checked=true; if(isSelf) el.disabled=true; } });
+        // ★ 禁止修改 Administrator 的名稱與密碼
+        if (n === 'Administrator') {
+             document.getElementById('r-name').disabled = true;
+             document.getElementById('r-pwd').disabled = true;
+             document.getElementById('r-pwd').placeholder = "禁止修改";
+             document.querySelectorAll('.role-perm').forEach(c=>{ c.checked=true; c.disabled=true; });
+             document.querySelectorAll('.r-sub').forEach(c=>{ c.checked=true; c.disabled=true; });
+        } else {
+             document.getElementById('r-name').disabled = false;
+             document.getElementById('r-pwd').disabled = false;
+             document.getElementById('r-pwd').placeholder = "密碼 (留空不改)";
+             if(n && roles[n]) {
+                (roles[n].perm||[]).forEach(p=>{ const el=document.querySelector(\`.role-perm[value="\${p}"]\`); if(el) { el.checked=true; if(isSelf) el.disabled=true; } });
+                (roles[n].subjects||[]).forEach(s=>{ const el=document.querySelector(\`.r-sub[value="\${s}"]\`); if(el) { el.checked=true; if(isSelf) el.disabled=true; } });
+             }
         }
     };
     
     window.saveRole = async () => {
         const n=document.getElementById('r-name').value; if(!n) return alert('必填名稱');
         if(n==='Administrator' && selectedRole!=='Administrator') return errorAlert('無權限修改管理員');
-        
-        let perms=[], subs=[];
-        if (n === 'Administrator') {
-             perms = ["manage_tasks_full", "manage_settings", "manage_roles"];
-             subs = ["all"];
-        } else {
-             perms=Array.from(document.querySelectorAll('.role-perm:checked')).map(x=>x.value);
-             subs=Array.from(document.querySelectorAll('.r-sub:checked')).map(x=>x.value);
-        }
-
+        const perms=Array.from(document.querySelectorAll('.role-perm:checked')).map(x=>x.value);
+        const subs=Array.from(document.querySelectorAll('.r-sub:checked')).map(x=>x.value);
         const res=await fetch(location.href,{method:'POST',body:JSON.stringify({action:'update_settings',groupId:gId,password:localStorage.getItem('hw_pwd'),roleName:selectedRole,settings:{roles:{[n]:{password:document.getElementById('r-pwd').value,perm:perms,subjects:subs}}}})});
         const d=await res.json();
         if(d.status==='success'){ if(d.newRoles) roles=d.newRoles; renderAll(); closeModal('role'); successAlert('已儲存'); } else errorAlert(d.msg);
@@ -2036,7 +2067,6 @@ function renderManagerHTML(origin) {
         }
     };
 
-    // Task Logic
     async function loadTasks(showMsg=false) {
         const res=await fetch(location.href,{method:'POST',body:JSON.stringify({action:'admin_get_tasks',groupId:gId})});
         const d=await res.json(); allTasks=d.tasks||[];
@@ -2091,4 +2121,27 @@ function renderManagerHTML(origin) {
     </script></body></html>`;
 }
 
-// --- END OF PART 10 (FINAL ULTIMATE FIX v4.9.5) ---
+// --- END OF PART 10 (FINAL ULTIMATE FIX v4.9.6) ---
+
+// --- START OF PART 11 (NEW: DB Auto-Repair) ---
+// 請將此段放在檔案的最末端 (Helper 之後)
+
+async function autoRepairDB(env) {
+    try {
+        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS group_auth (group_id TEXT PRIMARY KEY, 群組名稱 TEXT, 角色設定 TEXT, 科目設定 TEXT, advanced_settings TEXT, status TEXT DEFAULT 'active', version TEXT, is_locked INTEGER DEFAULT 0, locking_user_id TEXT, last_warning_ts INTEGER, terminated_at TEXT, last_data_update INTEGER)`).run();
+        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, 群組 TEXT, 建立時間 INTEGER, 截止日期 TEXT, due_time TEXT, 科目 TEXT, 內容 TEXT, 狀態 TEXT, 類別 TEXT, 來源 TEXT, is_hidden INTEGER DEFAULT 0, display_start_time TEXT, is_reliable INTEGER DEFAULT 1)`).run();
+        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS line_user_state (user_id TEXT PRIMARY KEY, group_id TEXT, state TEXT, updated_at INTEGER)`).run();
+        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS group_agreements (group_id TEXT, user_id TEXT, agreed_at INTEGER, PRIMARY KEY (group_id, user_id))`).run();
+        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS task_suggestions (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, group_id TEXT, suggested_by TEXT, suggestion_content TEXT, suggestion_subject TEXT, suggestion_category TEXT, status TEXT DEFAULT 'pending', created_at INTEGER)`).run();
+        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)`).run();
+        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id TEXT, actor TEXT, action TEXT, details TEXT, ip_address TEXT, user_agent TEXT, timestamp INTEGER)`).run();
+        
+        // 欄位補全檢查
+        try { await env.DB.prepare("ALTER TABLE tasks ADD COLUMN due_time TEXT").run(); } catch(e){}
+        try { await env.DB.prepare("ALTER TABLE tasks ADD COLUMN is_reliable INTEGER DEFAULT 1").run(); } catch(e){}
+        try { await env.DB.prepare("ALTER TABLE group_auth ADD COLUMN last_data_update INTEGER").run(); } catch(e){}
+    } catch(e) {
+        console.error("DB Auto Repair Failed:", e);
+    }
+}
+// --- END OF PART 11 ---
