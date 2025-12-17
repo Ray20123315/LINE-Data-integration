@@ -1,0 +1,8 @@
+[Environment Variables]
+SUPER_ADMIN_PASSWORD      = (設定您的超級管理員密碼)
+LINE_CHANNEL_ACCESS_TOKEN = (貼上從 LINE Developers 取得的 Access Token)
+LINE_CHANNEL_SECRET       = (貼上 Channel Secret)
+
+[Bindings]
+D1 Database Binding Name  = DB
+Workers AI Binding Name   = AI
