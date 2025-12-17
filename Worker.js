@@ -8,7 +8,7 @@ const SUPER_ADMIN_PATH = "/super-admin";
 
 // ★ 版本與更新控制
 const CURRENT_VERSION = "1.0.0";
-const TERMS_VERSION = "v2.1"; 
+const TERMS_VERSION = "v1.0"; 
 
 // ★ 維護模式設定
 const MAINT_MODES = {
