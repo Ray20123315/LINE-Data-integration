@@ -7,7 +7,7 @@ const SUPER_ADMIN_PASSWORD_ENV_KEY = 'SUPER_ADMIN_PASSWORD';
 const SUPER_ADMIN_PATH = "/super-admin";
 
 // ★ 版本與更新控制
-const CURRENT_VERSION = "4.9.4"; // TERMS_UI_UPDATE
+const CURRENT_VERSION = "1.0.0";
 const TERMS_VERSION = "v2.1"; 
 
 // ★ 維護模式設定
