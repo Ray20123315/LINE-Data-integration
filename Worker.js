@@ -7,8 +7,8 @@ const SUPER_ADMIN_PASSWORD_ENV_KEY = 'SUPER_ADMIN_PASSWORD';
 const SUPER_ADMIN_PATH = "/super-admin";
 
 // ★ 版本與更新控制
-const CURRENT_VERSION = "1.0.0";
-const TERMS_VERSION = "v1.0"; 
+const CURRENT_VERSION = "4.9.4"; // TERMS_UI_UPDATE
+const TERMS_VERSION = "v2.1"; 
 
 // ★ 維護模式設定
 const MAINT_MODES = {
@@ -215,7 +215,7 @@ const COMMON_UI_SCRIPT = `
 
 // --- END OF PART 1 ---
 
-// --- START OF PART 2 (With Auto-Repair Call) ---
+// --- START OF PART 2 (Inject Anti-Debug Script) ---
 
 export default {
     async fetch(request, env, ctx) {
@@ -223,8 +223,14 @@ export default {
         const hostname = url.hostname; 
         const CURRENT_ORIGIN = `${url.protocol}//${hostname}${url.port ? ':' + url.port : ''}`;
         
-        // ★ 呼叫資料庫自動修復 (Part 11)
-        if (typeof autoRepairDB === 'function') await autoRepairDB(env);
+        // DB 初始化
+        try {
+            await env.DB.prepare(`CREATE TABLE IF NOT EXISTS task_suggestions (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, group_id TEXT, suggested_by TEXT, suggestion_content TEXT, suggestion_subject TEXT, suggestion_category TEXT, status TEXT DEFAULT 'pending', created_at INTEGER)`).run();
+            await env.DB.prepare(`CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)`).run();
+            try { await env.DB.prepare("ALTER TABLE tasks ADD COLUMN due_time TEXT").run(); } catch(e){}
+            try { await env.DB.prepare("ALTER TABLE tasks ADD COLUMN is_reliable INTEGER DEFAULT 1").run(); } catch(e){}
+            try { await env.DB.prepare("ALTER TABLE group_auth ADD COLUMN last_data_update INTEGER").run(); } catch(e){}
+        } catch(e){}
 
         const isManagerSite = hostname.includes("manage") || url.pathname.startsWith("/manager");
         const isSuperAdmin = hostname.includes("super") || url.pathname === SUPER_ADMIN_PATH; 
@@ -245,9 +251,11 @@ export default {
             return handlePost(request, env, ctx, CURRENT_ORIGIN);
         }
 
+        // 讀取系統設定 (維護模式 & 安全防護)
+        const config = await getSystemConfig(env);
+
         // 3. 維護模式攔截
         if (!isSuperAdmin && url.pathname !== "/eula" && url.pathname !== "/terms") {
-            const config = await getSystemConfig(env);
             const maint = isManagerSite ? config.maintenance?.backend : config.maintenance?.frontend;
             const isTargetPage = url.searchParams.has('id') || isManagerSite;
 
@@ -260,7 +268,7 @@ export default {
             }
         }
 
-        // 4. 路由分發
+        // 準備回應內容
         let responseHTML = "";
         if (url.pathname === "/terms") responseHTML = renderTermsHTML(CURRENT_ORIGIN);
         else if (url.pathname === "/eula") responseHTML = renderEULAHTML(url.searchParams.get('redirect'), CURRENT_ORIGIN);
@@ -272,10 +280,22 @@ export default {
             else responseHTML = renderStudentHTML(CURRENT_ORIGIN);
         }
 
-        // 注入防護腳本
-        const config = await getSystemConfig(env);
+        // ★ 注入防護腳本 (Anti-Debug / F12 Block)
+        // 只有當設定開啟，且不是 Super Admin 時才注入
         if (config.security_policy?.block_devtools && !isSuperAdmin) {
-            const antiDebugScript = `<script>(function(){document.addEventListener('contextmenu',e=>e.preventDefault());document.onkeydown=e=>{if(e.key==='F12'||e.keyCode===123||(e.ctrlKey&&e.shiftKey&&(e.key==='I'||e.key==='J'||e.key==='C'))||(e.ctrlKey&&e.key==='U')){e.preventDefault();return false;}};})();</script>`;
+            const antiDebugScript = `
+            <script>
+            (function(){
+                document.addEventListener('contextmenu', e => e.preventDefault());
+                document.onkeydown = e => {
+                    if(e.key === 'F12' || e.keyCode === 123 || 
+                       (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) || 
+                       (e.ctrlKey && e.key === 'U')) {
+                        e.preventDefault(); return false;
+                    }
+                };
+            })();
+            </script>`;
             responseHTML = responseHTML.replace('</body>', `${antiDebugScript}</body>`);
         }
 
@@ -283,6 +303,9 @@ export default {
     }
 };
 
+// ====================================================================
+// ★ 後端邏輯 (API 處理)
+// ====================================================================
 async function handlePost(request, env, ctx, origin) {
     try {
         const ip = request.headers.get('CF-Connecting-IP') || 'Unknown';
@@ -295,6 +318,7 @@ async function handlePost(request, env, ctx, origin) {
             return handleSuperAdminAction(action, json, env, ip, request);
         }
 
+        // 後端 API 維護模式攔截
         const config = await getSystemConfig(env);
         const beMaint = config.maintenance?.backend;
         if (beMaint && beMaint.enabled === true) {
@@ -305,19 +329,63 @@ async function handlePost(request, env, ctx, origin) {
             }
         }
 
+        // --- 管理員相關 API ---
         if (action === "admin_check_status") {
             const auth = await env.DB.prepare("SELECT * FROM group_auth WHERE group_id = ?").bind(groupId).first();
             if (!auth) return new Response(JSON.stringify({ status: "need_setup" }));
             if (auth.status === 'terminated') return new Response(JSON.stringify({ status: "terminated", msg: "服務已終止" }));
+            
             const roles = JSON.parse(auth.角色設定 || '{}');
             let adv = {}; try { adv = JSON.parse(auth.advanced_settings || '{}'); } catch(e){}
             let subjects = {}; try { subjects = JSON.parse(auth.科目設定 || '{}'); } catch(e){}
+            
             return new Response(JSON.stringify({ status: "login", roles: roles, subjects: subjects, groupName: auth.群組名稱, advanced: adv }));
         }
-        // ... (其餘 API 保持不變，由 Part 3 接續) ...
-        // 請確保您已正確貼上 Part 3
+
+        if (action === "admin_login") {
+            const auth = await env.DB.prepare("SELECT * FROM group_auth WHERE group_id = ?").bind(groupId).first();
+            if(!auth) return new Response(JSON.stringify({ status: "fail", msg: "ID錯誤" }));
+            if (auth.status === 'terminated') return new Response(JSON.stringify({ status: "fail", msg: "服務已終止" }));
+            
+            let roles = JSON.parse(auth.角色設定);
+            const role = roles[json.roleName];
+            if(!role) return new Response(JSON.stringify({ status: "fail", msg: "角色不存在" }));
+            
+            let success = false;
+            let needsUpdate = false;
+            const inputPwd = (json.password || "").trim();
+
+            if (!role.hash || role.hash === "") { success = true; } 
+            else if (role.hash.startsWith("pbkdf2$")) { success = await verifyPassword(inputPwd, role.hash); } 
+            else { if (role.hash === await sha256(inputPwd)) { success = true; needsUpdate = true; } }
+
+            if(success) {
+                if (needsUpdate && inputPwd) {
+                    role.hash = await hashPassword(inputPwd);
+                    roles[json.roleName] = role;
+                    await env.DB.prepare("UPDATE group_auth SET 角色設定 = ? WHERE group_id = ?").bind(JSON.stringify(roles), groupId).run();
+                }
+                if (json.roleName === "Administrator" || json.roleName === "總管理員") {
+                    if (!role.binding_code && !role.owner_line_id) {
+                        role.binding_code = Math.floor(1000 + Math.random() * 9000).toString();
+                        roles[json.roleName] = role;
+                        await env.DB.prepare("UPDATE group_auth SET 角色設定 = ? WHERE group_id = ?").bind(JSON.stringify(roles), groupId).run();
+                    }
+                }
+                let adv = {}; try { adv = JSON.parse(auth.advanced_settings || '{}'); } catch(e){}
+                let subjects = {}; try { subjects = JSON.parse(auth.科目設定); } catch(e){}
+                
+                await writeLog(env, groupId, json.roleName, "登入成功", "", request);
+                return new Response(JSON.stringify({ 
+                    status: "success", roleData: role, allRoles: roles, subjects: subjects, groupName: auth.群組名稱, advanced: adv 
+                }));
+            }
+            await writeLog(env, groupId, json.roleName, "登入失敗", "密碼錯誤", request);
+            return new Response(JSON.stringify({ status: "fail", msg: "密碼錯誤" }));
+        }
 
 // --- END OF PART 2 ---
+
 
 // --- START OF PART 3 ---
         if (action === "update_settings") {
@@ -864,7 +932,9 @@ for (const event of events) {
 
 // --- END OF PART 5 ---
 
-// --- START OF PART 6 (Fix Agree & Allagree Logic) ---
+// --- START OF PART 6 (Fix Logic & Syntax) ---
+
+// --- 接續 Part 5 的 try 區塊 ---
 
 if (text === '/bot help') { 
     const helpMsg = `🤖 指令清單：\n🔹 /bot 學生：取得學生網址\n🔹 /bot 後台：取得後台網址\n🔹 /bot 復原碼：顯示復原碼 (限私訊)\n🔹 /bot ID：顯示群組 ID\n\n⚙️ 管理指令：\n/bind <4碼>：綁定管理員(限私訊)\n\n⚙️ 其他：\n/bot newID：生成新群組\n/bot <ID>：沿用舊設定\n/bot test：系統診斷(限管理員)\n/bot reboot：重啟服務`; 
@@ -872,66 +942,80 @@ if (text === '/bot help') {
     continue; 
 }
 
-// ★ 隱藏指令：/bot allagree (修復版 - 修正訊息換行)
+// 取得群組基本資料 (用於判斷狀態)
+const groupAuth = await env.DB.prepare("SELECT * FROM group_auth WHERE group_id = ?").bind(gId).first();
+
+// ★ 隱藏指令：/bot allagree (強制解鎖，並不需綁定特定使用者狀態)
 if (text === '/bot allagree' && gId) {
     await env.DB.prepare("INSERT OR IGNORE INTO group_auth (group_id) VALUES (?)").bind(gId).run();
+    // 強制解鎖並更新版本
     await env.DB.prepare("UPDATE group_auth SET is_locked = 0, locking_user_id = NULL, version = ? WHERE group_id = ?").bind(TERMS_VERSION, gId).run();
     
-    const check = await env.DB.prepare("SELECT 角色設定 FROM group_auth WHERE group_id = ?").bind(gId).first();
-    let setupMsg = "";
-    if (!check || !check.角色設定 || check.角色設定 === '{}') {
-        await env.DB.prepare("UPDATE line_user_state SET state = 'ready_for_setup' WHERE group_id = ?").bind(gId).run();
-        setupMsg = "\n請輸入 `/bot newID` (建立新群組) 或 `/bot <舊ID>` (沿用舊設定)。";
-    } else {
-        await env.DB.prepare("UPDATE line_user_state SET state = 'setup_complete' WHERE group_id = ?").bind(gId).run();
+    // 判斷是否需要初始化 (若無角色設定)
+    let setupHint = "";
+    const currentRoles = groupAuth ? groupAuth.角色設定 : null;
+    if (!currentRoles || currentRoles === '{}') {
+        setupHint = "\n\n請輸入 `/bot newID` (建立新群組) 或 `/bot <舊ID>` (沿用舊設定)。";
     }
-    ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `㊙️ 隱藏指令生效：已強制全員同意條款，服務已解鎖。${setupMsg}`));
+
+    ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `㊙️ 隱藏指令生效：已強制全員同意條款，服務已解鎖。${setupHint}`));
     continue;
 }
 
-const groupAuthPreCheck = await env.DB.prepare("SELECT status, version, is_locked, last_warning_ts FROM group_auth WHERE group_id = ?").bind(gId).first();
-if (groupAuthPreCheck && groupAuthPreCheck.status === 'terminated') continue; 
+// 檢查是否已終止
+if (groupAuth && groupAuth.status === 'terminated') continue; 
 
+// 取得使用者狀態
 let userState = await env.DB.prepare("SELECT * FROM line_user_state WHERE user_id = ? AND group_id = ?").bind(uId, gId).first();
 
-if (groupAuthPreCheck && groupAuthPreCheck.version !== TERMS_VERSION && userState?.state !== 'awaiting_agreement') {
+// 檢查是否因「條款更新」或「新成員加入」而鎖定
+// 邏輯：(版本不同 OR 被鎖定) AND 還沒同意
+const isVersionMismatch = groupAuth && groupAuth.version !== TERMS_VERSION;
+const isLocked = groupAuth && groupAuth.is_locked === 1;
+const hasAgreed = await env.DB.prepare("SELECT 1 FROM group_agreements WHERE group_id = ? AND user_id = ?").bind(gId, uId).first();
+
+// 若版本不符，先鎖定群組
+if (isVersionMismatch && !isLocked) {
     await env.DB.prepare("UPDATE group_auth SET is_locked = 1 WHERE group_id = ?").bind(gId).run();
-    await env.DB.prepare("INSERT OR REPLACE INTO line_user_state (user_id, group_id, state) VALUES (?, ?, 'awaiting_agreement')").bind(uId, gId).run();
-    await env.DB.prepare("DELETE FROM group_agreements WHERE group_id = ?").bind(gId).run();
+    await env.DB.prepare("DELETE FROM group_agreements WHERE group_id = ?").bind(gId).run(); // 清空舊同意紀錄
     ctx.waitUntil(replyLineMessageWithButton(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `🔄 服務條款已更新 (${TERMS_VERSION})！\n為確保權益，請全體成員重新同意。\n\n${CHANGELOG}\n\n🟢 同意：/bot agree\n🔴 不同意：/bot disagree`, "閱讀條款", `${origin}/terms?ack=1`));
     continue;
 }
 
+// ★ /bot start (初始化)
 if (text === '/bot start') {
     await env.DB.prepare("INSERT OR IGNORE INTO group_auth (group_id) VALUES (?)").bind(gId).run();
-    let groupAuth = await env.DB.prepare("SELECT version FROM group_auth WHERE group_id = ?").bind(gId).first();
-    if (groupAuth && groupAuth.version && groupAuth.version !== TERMS_VERSION) {
+    // 若版本舊，鎖定之
+    if (isVersionMismatch) {
         await env.DB.prepare("UPDATE group_auth SET is_locked = 1 WHERE group_id = ?").bind(gId).run();
     }
-    await env.DB.prepare("INSERT OR REPLACE INTO line_user_state (user_id, group_id, state) VALUES (?, ?, 'awaiting_agreement')").bind(uId, gId).run();
-    await env.DB.prepare("DELETE FROM group_agreements WHERE group_id = ?").bind(gId).run(); 
     const agreeMsg = `[條款版本: ${TERMS_VERSION}]\n請點擊連結閱讀條款，並依照以下指令操作：\n\n🟢 同意：請輸入 /bot agree\n🔴 不同意：請輸入 /bot disagree`;
     ctx.waitUntil(replyLineMessageWithButton(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, agreeMsg, "閱讀服務條款", `${origin}/terms`));
     continue; 
 }
 
-const hasAgreed = await env.DB.prepare("SELECT 1 FROM group_agreements WHERE group_id = ? AND user_id = ?").bind(gId, uId).first();
-const isGroupLocked = (groupAuthPreCheck && groupAuthPreCheck.is_locked === 1);
-let currentState = userState ? userState.state : (isGroupLocked && !hasAgreed ? 'awaiting_agreement' : 'setup_complete');
+// --- 狀態機邏輯 ---
 
-if (currentState === 'awaiting_agreement') {
+// 1. 鎖定狀態 (等待同意)
+if (isLocked || isVersionMismatch) {
     if (text === '/bot agree') {
-        // ★ 修復：即使已同意，也允許再次觸發以檢查解鎖條件
-        await env.DB.prepare("INSERT OR IGNORE INTO group_agreements (group_id, user_id) VALUES (?, ?)").bind(gId, uId).run();
+        if (!hasAgreed) {
+            await env.DB.prepare("INSERT OR IGNORE INTO group_agreements (group_id, user_id) VALUES (?, ?)").bind(gId, uId).run();
+        }
         
+        // 檢查全員是否同意
         if(await checkAllAgreed(env, gId)) {
+            // 解鎖並更新版本
             await env.DB.prepare("UPDATE group_auth SET is_locked = 0, locking_user_id = NULL, version = ? WHERE group_id = ?").bind(TERMS_VERSION, gId).run();
-            const auth = await env.DB.prepare("SELECT 角色設定 FROM group_auth WHERE group_id = ?").bind(gId).first();
-            if (!auth || !auth.角色設定 || auth.角色設定 === '{}') {
-                 await env.DB.prepare("INSERT OR REPLACE INTO line_user_state (user_id, group_id, state) VALUES (?, ?, 'ready_for_setup')").bind(uId, gId).run();
+            
+            // 檢查是否需要設定 ID
+            // 重新讀取最新的 auth 狀態
+            const freshAuth = await env.DB.prepare("SELECT 角色設定 FROM group_auth WHERE group_id = ?").bind(gId).first();
+            const isConfigured = freshAuth && freshAuth.角色設定 && freshAuth.角色設定 !== '{}';
+
+            if (!isConfigured) {
                  ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `✅ 全體成員皆已同意！\n請輸入 \`/bot newID\` (建立新群組) 或 \`/bot <舊ID>\` (沿用舊設定)。`));
             } else {
-                 await env.DB.prepare("UPDATE line_user_state SET state = 'setup_complete' WHERE group_id = ?").bind(gId).run();
                  ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `✅ 條款更新完畢，服務已恢復！\n${getExistingWelcomeMessage(gId, origin)}`));
             }
         }
@@ -940,15 +1024,22 @@ if (currentState === 'awaiting_agreement') {
         await env.DB.prepare("UPDATE group_auth SET status = 'terminated', terminated_at = ? WHERE group_id = ?").bind(terminatedAt, gId).run();
         ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `🚨 服務緊急終止。\n因成員拒絕條款，服務已永久關閉。`));
     }
+    // 鎖定期間不回應其他指令
     continue;
 }
 
-if (currentState === 'ready_for_setup') {
+// 2. 設定狀態 (群組未鎖定，但尚未有角色設定)
+// ★ 關鍵修復：不依賴使用者個人的 state，而是看群組是否「空設定」
+const isGroupConfigured = groupAuth && groupAuth.角色設定 && groupAuth.角色設定 !== '{}';
+
+if (!isGroupConfigured) {
+    // 建立新群組
     if (text.startsWith('/bot newID')) {
         const sysConfig = await getSystemConfig(env);
         const policy = sysConfig.creation_policy || { mode: 'open', password: '' };
         let allow = false;
         let errMsg = "";
+
         if (policy.mode === 'closed') errMsg = "⛔ 系統目前禁止建立新群組。";
         else if (policy.mode === 'restricted') {
             const inputPwd = text.replace('/bot newID', '').trim();
@@ -964,69 +1055,64 @@ if (currentState === 'ready_for_setup') {
         const rescueCode = genRescueCode();
         const bindingCode = Math.floor(1000 + Math.random() * 9000).toString();
         const initialRoles = { "Administrator": { hash: "", subjects: ["all"], perm: ["manage_roles", "manage_settings", "manage_tasks_full"], level: 99, rec: rescueCode, binding_code: bindingCode } };
+        // 預設科目
         const defaultSubjects = JSON.stringify({ 
             '國文': ['國文', '國語'], '英文': ['英文'], '數學': ['數學'], '地理': ['地理'], 
             '歷史': ['歷史'], '公民': ['公民'], '理化': ['理化', '物理', '化學'], '生物': ['生物'], 
             '地科': ['地科', '地球科學'], '資訊': ['資訊', '電腦'], '體育': ['體育'], '美術': ['美術'], '其他': [] 
         });
         
-        const check = await env.DB.prepare("SELECT 角色設定 FROM group_auth WHERE group_id = ?").bind(gId).first();
-        if (!check || !check.角色設定 || check.角色設定 === '{}') {
-             await env.DB.prepare("UPDATE group_auth SET 群組名稱 = ?, 角色設定 = ?, 科目設定 = ?, status = 'active', version = ?, is_locked = 0 WHERE group_id = ?").bind('未命名群組', JSON.stringify(initialRoles), defaultSubjects, TERMS_VERSION, gId).run();
-        }
+        await env.DB.prepare("UPDATE group_auth SET 群組名稱 = ?, 角色設定 = ?, 科目設定 = ?, status = 'active', version = ?, is_locked = 0 WHERE group_id = ?").bind('未命名群組', JSON.stringify(initialRoles), defaultSubjects, TERMS_VERSION, gId).run();
+        
+        // 更新當前使用者狀態 (方便日後追蹤，非必要)
         await env.DB.prepare("INSERT OR REPLACE INTO line_user_state (user_id, group_id, state) VALUES (?, ?, 'setup_complete')").bind(uId, gId).run();
+        
         ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, getNewWelcomeMessage(gId, origin)));
         continue;
     }
     
+    // 沿用舊群組
     if (text.startsWith('/bot ') && text.length > 6) {
          const inputId = text.replace('/bot ', '').trim();
-         const oldGroup = await env.DB.prepare("SELECT group_id FROM group_auth WHERE group_id = ?").bind(inputId).first();
+         // 檢查該 ID 是否存在且已設定
+         const oldGroup = await env.DB.prepare("SELECT group_id FROM group_auth WHERE group_id = ? AND 角色設定 IS NOT NULL").bind(inputId).first();
+         
          if (oldGroup) {
+            // 更新目前使用者的指標
             await env.DB.prepare("INSERT OR REPLACE INTO line_user_state (user_id, group_id, state) VALUES (?, ?, 'setup_complete')").bind(uId, inputId).run();
             ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, getExistingWelcomeMessage(inputId, origin)));
          } else {
-            ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, '❌ 找不到該 ID。'));
+            ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, '❌ 找不到該 ID 或該群組尚未初始化。'));
          }
          continue;
     }
-}
-
-const effectiveGId = userState?.group_id || gId;
-const groupAuth = await env.DB.prepare("SELECT * FROM group_auth WHERE group_id = ?").bind(effectiveGId).first();
-if (groupAuth && groupAuth.is_locked === 1) {
-    if (text === '/bot agree') {
-         await env.DB.prepare("INSERT OR IGNORE INTO group_agreements (group_id, user_id) VALUES (?, ?)").bind(gId, uId).run();
-         if(await checkAllAgreed(env, gId)) {
-            await env.DB.prepare("UPDATE group_auth SET is_locked = 0, locking_user_id = NULL WHERE group_id = ?").bind(gId).run();
-            ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, "✅ 服務恢復。"));
-         }
-    } else if (text.startsWith('/bot')) {
-        const now = Date.now();
-        if (now - (groupAuth.last_warning_ts || 0) > 60000) {
-            await env.DB.prepare("UPDATE group_auth SET last_warning_ts = ? WHERE group_id = ?").bind(now, gId).run();
-            ctx.waitUntil(replyLineMessageWithButton(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, "⚠️ 群組暫停服務中，等待新成員同意條款。", "查看條款", `${origin}/terms`));
-        }
+    
+    // 若尚未設定，不處理其他指令 (或提示需設定)
+    // 這裡選擇靜默，除非輸入指令錯誤
+    if (text.startsWith('/bot')) {
+         ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, "⚠️ 此群組尚未初始化，請輸入 `/bot newID` 建立資料。"));
     }
     continue;
 }
 
-if (!groupAuth) continue;
-const finalGid = effectiveGId;
+// 3. 正常運作狀態 (已設定且未鎖定)
+const finalGid = userState?.group_id || gId; // 優先使用個人綁定的 ID (針對沿用舊 ID 的情況)
+
+// 檢查禁用指令
 let settings = {}; try { settings = JSON.parse(groupAuth.advanced_settings || '{}'); } catch(e){}
 const disabledCmds = settings.disabled_commands || [];
-
 if (text.startsWith('/bot') && disabledCmds.some(cmd => text.startsWith(cmd))) {
     ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, "🚫 此指令已被管理員禁用。"));
     continue;
 }
 
+// 刪除群組流程
 if (text === '/bot end') { 
     ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `⚠️ 確定要刪除 ${finalGid} 的所有資料嗎？\n請在 30 秒內輸入：確認刪除 ${finalGid}`)); 
     await env.DB.prepare("INSERT OR REPLACE INTO line_user_state (user_id, group_id, state) VALUES (?, ?, 'awaiting_delete_confirm')").bind(uId, finalGid).run(); 
     continue; 
 }
-if (currentState === 'awaiting_delete_confirm' && text === `確認刪除 ${finalGid}`) { 
+if (userState?.state === 'awaiting_delete_confirm' && text === `確認刪除 ${finalGid}`) { 
     await env.DB.prepare("DELETE FROM group_auth WHERE group_id = ?").bind(finalGid).run(); 
     await env.DB.prepare("DELETE FROM tasks WHERE 群組 = ?").bind(finalGid).run(); 
     await env.DB.prepare("DELETE FROM line_user_state WHERE group_id = ?").bind(finalGid).run(); 
@@ -1034,10 +1120,12 @@ if (currentState === 'awaiting_delete_confirm' && text === `確認刪除 ${final
     continue;
 }
 
+// 一般資訊指令
 if (text === "/bot 學生" || text === "/bot student") { ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `📊 學生班級作業：\n${origin}/?id=${finalGid}`)); continue; } 
 if (text === "/bot 後台" || text === "/bot manager") { ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `🔧 後台管理：\n${origin}/manager?id=${finalGid}`)); continue; } 
 if (text === "/bot ID") { ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `Group ID:\n${finalGid}`)); continue; } 
 
+// 作業判讀 (AI / 規則)
 if (!text.startsWith('/')) {
     let subConfig = null; try { subConfig = JSON.parse(groupAuth.科目設定 || '{}'); } catch(e){}
     let periods = settings.periods || {};
@@ -1062,7 +1150,6 @@ if (!text.startsWith('/')) {
             try {
                 await env.DB.batch(batch);
                 await triggerDataUpdate(env, finalGid);
-                await writeLog(env, finalGid, "System", "AI判讀成功", `新增 ${tasks.length} 筆作業`, null);
             } catch (dbErr) {
                 await writeLog(env, finalGid, "System", "AI作業寫入失敗", dbErr.message, null);
             }
@@ -1074,9 +1161,9 @@ if (!text.startsWith('/')) {
     console.error("Webhook Error:", err); 
     try { await writeLog(env, "SYSTEM", "Webhook", "CriticalError", err.message, null); } catch(e){}
 }
-}
+} // End of for loop
 return new Response("ok");
-}
+} // End of handleLineWebhook
 
 // --- END OF PART 6 ---
 
@@ -2122,26 +2209,3 @@ function renderManagerHTML(origin) {
 }
 
 // --- END OF PART 10 (FINAL ULTIMATE FIX v4.9.6) ---
-
-// --- START OF PART 11 (NEW: DB Auto-Repair) ---
-// 請將此段放在檔案的最末端 (Helper 之後)
-
-async function autoRepairDB(env) {
-    try {
-        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS group_auth (group_id TEXT PRIMARY KEY, 群組名稱 TEXT, 角色設定 TEXT, 科目設定 TEXT, advanced_settings TEXT, status TEXT DEFAULT 'active', version TEXT, is_locked INTEGER DEFAULT 0, locking_user_id TEXT, last_warning_ts INTEGER, terminated_at TEXT, last_data_update INTEGER)`).run();
-        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, 群組 TEXT, 建立時間 INTEGER, 截止日期 TEXT, due_time TEXT, 科目 TEXT, 內容 TEXT, 狀態 TEXT, 類別 TEXT, 來源 TEXT, is_hidden INTEGER DEFAULT 0, display_start_time TEXT, is_reliable INTEGER DEFAULT 1)`).run();
-        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS line_user_state (user_id TEXT PRIMARY KEY, group_id TEXT, state TEXT, updated_at INTEGER)`).run();
-        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS group_agreements (group_id TEXT, user_id TEXT, agreed_at INTEGER, PRIMARY KEY (group_id, user_id))`).run();
-        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS task_suggestions (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, group_id TEXT, suggested_by TEXT, suggestion_content TEXT, suggestion_subject TEXT, suggestion_category TEXT, status TEXT DEFAULT 'pending', created_at INTEGER)`).run();
-        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)`).run();
-        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id TEXT, actor TEXT, action TEXT, details TEXT, ip_address TEXT, user_agent TEXT, timestamp INTEGER)`).run();
-        
-        // 欄位補全檢查
-        try { await env.DB.prepare("ALTER TABLE tasks ADD COLUMN due_time TEXT").run(); } catch(e){}
-        try { await env.DB.prepare("ALTER TABLE tasks ADD COLUMN is_reliable INTEGER DEFAULT 1").run(); } catch(e){}
-        try { await env.DB.prepare("ALTER TABLE group_auth ADD COLUMN last_data_update INTEGER").run(); } catch(e){}
-    } catch(e) {
-        console.error("DB Auto Repair Failed:", e);
-    }
-}
-// --- END OF PART 11 ---
