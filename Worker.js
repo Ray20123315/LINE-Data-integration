@@ -1,16 +1,9 @@
-// --- START OF PART 1 (Updated Terms UI) ---
-
-// ==========================================
-// ★ 設定區
-// ==========================================
 const SUPER_ADMIN_PASSWORD_ENV_KEY = 'SUPER_ADMIN_PASSWORD'; 
 const SUPER_ADMIN_PATH = "/super-admin";
 
-// ★ 版本與更新控制
-const CURRENT_VERSION = "4.9.4"; // TERMS_UI_UPDATE
+const CURRENT_VERSION = "4.9.4"; 
 const TERMS_VERSION = "v2.1"; 
 
-// ★ 維護模式設定
 const MAINT_MODES = {
     "off": "正常運作",
     "data_update": "資料更新中",
@@ -27,10 +20,8 @@ const MAINT_MESSAGES_DETAIL = {
     "off": { title: "正常運作", desc: "系統服務正常。" }
 };
 
-// 髒話過濾表
 const DIRTY_WORDS = ["幹", "靠北", "三小", "機掰", "白癡", "智障", "腦殘", "fuck", "shit", "bitch", "傻B", "去死", "垃圾"];
 
-// 常數定義
 const CHANGELOG = `版本 ${CURRENT_VERSION} 更新：\n- 服務條款頁面樣式優化。\n- 新增明確的同意/拒絕指令區塊。`;
 const LINK_LINE_HOST = "https://github.com/Ray20123315/LINE-Data-integration"; 
 const LINK_DISCORD = "https://discord.gg/kwRpZwn772";
@@ -38,7 +29,6 @@ const MAIL_CONTACT = "ray2026worker@ray2026.dpdns.org";
 const CUSTOM_LINE_CONTACT = "https://lin.ee/VJ8IC4D";
 const DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1447399857336746104/C3i3kpWvPm3ylH9x8tqi-PMEaKOxrNdqXftgYXmPtk-S0tLgQfvpbjyfcidUkIMiIZjZ";
 
-// HTML 靜態內容 (更新版服務條款 - 含綠/紅指令框)
 const TERMS_HTML_CONTENT = `
 <h1 class="text-3xl font-bold mb-6 text-blue-400 border-b border-gray-700 pb-4">服務條款 (${TERMS_VERSION})</h1>
 
@@ -126,12 +116,10 @@ const TERMS_HTML_CONTENT = `
 const LEGAL_TEXT_SHORT = `[條款版本: ${TERMS_VERSION}] 請點擊連結閱讀條款，並輸入 /bot agree 同意。`;
 const EULA_TEXT = `<h1 class="text-2xl font-bold mb-4">最終使用者許可協議 (EULA)</h1><p>使用前請同意本條款。</p>`;
 
-// 風控與安全性設定
 const RISK_CONTROL_ENABLED = true; 
 const MAX_LOGIN_ATTEMPTS = 5;      
 const LOCKOUT_DURATION = 15 * 60 * 1000;
 
-// UI 共用腳本
 const COMMON_UI_SCRIPT = `
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -213,17 +201,12 @@ const COMMON_UI_SCRIPT = `
 </script>
 `;
 
-// --- END OF PART 1 ---
-
-// --- START OF PART 2 (Inject Anti-Debug Script) ---
-
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
         const hostname = url.hostname; 
         const CURRENT_ORIGIN = `${url.protocol}//${hostname}${url.port ? ':' + url.port : ''}`;
         
-        // DB 初始化
         try {
             await env.DB.prepare(`CREATE TABLE IF NOT EXISTS task_suggestions (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER, group_id TEXT, suggested_by TEXT, suggestion_content TEXT, suggestion_subject TEXT, suggestion_category TEXT, status TEXT DEFAULT 'pending', created_at INTEGER)`).run();
             await env.DB.prepare(`CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)`).run();
@@ -235,7 +218,6 @@ export default {
         const isManagerSite = hostname.includes("manage") || url.pathname.startsWith("/manager");
         const isSuperAdmin = hostname.includes("super") || url.pathname === SUPER_ADMIN_PATH; 
 
-        // 1. Polling API
         if (url.searchParams.get('action') === 'check_updates') {
             const gid = url.searchParams.get('id');
             const auth = await env.DB.prepare("SELECT last_data_update FROM group_auth WHERE group_id = ?").bind(gid).first();
@@ -246,15 +228,12 @@ export default {
             }), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
         }
 
-        // 2. POST API 處理
         if (request.method === "POST") {
             return handlePost(request, env, ctx, CURRENT_ORIGIN);
         }
 
-        // 讀取系統設定 (維護模式 & 安全防護)
         const config = await getSystemConfig(env);
 
-        // 3. 維護模式攔截
         if (!isSuperAdmin && url.pathname !== "/eula" && url.pathname !== "/terms") {
             const maint = isManagerSite ? config.maintenance?.backend : config.maintenance?.frontend;
             const isTargetPage = url.searchParams.has('id') || isManagerSite;
@@ -268,7 +247,6 @@ export default {
             }
         }
 
-        // 準備回應內容
         let responseHTML = "";
         if (url.pathname === "/terms") responseHTML = renderTermsHTML(CURRENT_ORIGIN);
         else if (url.pathname === "/eula") responseHTML = renderEULAHTML(url.searchParams.get('redirect'), CURRENT_ORIGIN);
@@ -280,8 +258,6 @@ export default {
             else responseHTML = renderStudentHTML(CURRENT_ORIGIN);
         }
 
-        // ★ 注入防護腳本 (Anti-Debug / F12 Block)
-        // 只有當設定開啟，且不是 Super Admin 時才注入
         if (config.security_policy?.block_devtools && !isSuperAdmin) {
             const antiDebugScript = `
             <script>
@@ -303,9 +279,6 @@ export default {
     }
 };
 
-// ====================================================================
-// ★ 後端邏輯 (API 處理)
-// ====================================================================
 async function handlePost(request, env, ctx, origin) {
     try {
         const ip = request.headers.get('CF-Connecting-IP') || 'Unknown';
@@ -318,7 +291,7 @@ async function handlePost(request, env, ctx, origin) {
             return handleSuperAdminAction(action, json, env, ip, request);
         }
 
-        // 後端 API 維護模式攔截
+
         const config = await getSystemConfig(env);
         const beMaint = config.maintenance?.backend;
         if (beMaint && beMaint.enabled === true) {
@@ -329,7 +302,7 @@ async function handlePost(request, env, ctx, origin) {
             }
         }
 
-        // --- 管理員相關 API ---
+
         if (action === "admin_check_status") {
             const auth = await env.DB.prepare("SELECT * FROM group_auth WHERE group_id = ?").bind(groupId).first();
             if (!auth) return new Response(JSON.stringify({ status: "need_setup" }));
@@ -384,10 +357,6 @@ async function handlePost(request, env, ctx, origin) {
             return new Response(JSON.stringify({ status: "fail", msg: "密碼錯誤" }));
         }
 
-// --- END OF PART 2 ---
-
-
-// --- START OF PART 3 ---
         if (action === "update_settings") {
             const auth = await env.DB.prepare("SELECT * FROM group_auth WHERE group_id = ?").bind(groupId).first();
             let roles = JSON.parse(auth.角色設定 || '{}');
@@ -539,10 +508,6 @@ async function handlePost(request, env, ctx, origin) {
             return new Response(JSON.stringify({ status: "success" }));
         }
 
-// --- END OF PART 3 ---
-
-// --- START OF PART 4 ---
-
 if (action === "update_task") {
     const auth = await env.DB.prepare("SELECT 角色設定 FROM group_auth WHERE group_id = ?").bind(groupId).first();
     const roles = JSON.parse(auth.角色設定);
@@ -583,8 +548,6 @@ if (action === "manage_task") {
     await triggerDataUpdate(env, groupId);
     return new Response(JSON.stringify({ status: "success" }));
 }
-
-// --- 勘誤建議 ---
 
 if (action === "submit_suggestion") {
     await env.DB.prepare("INSERT INTO task_suggestions (task_id, group_id, suggested_by, suggestion_content, suggestion_subject, suggestion_category, status, created_at) VALUES (?, ?, 'Student_FE', ?, ?, ?, 'pending', ?)")
@@ -627,9 +590,6 @@ return new Response(JSON.stringify({ error: err.message }), { status: 500 });
 }
 }
 
-// ====================================================================
-// ★ Super Admin 邏輯 (支援設定儲存與敏感操作密碼驗證)
-// ====================================================================
 async function handleSuperAdminAction(action, json, env, ip, request) {
     const superPwd = env[SUPER_ADMIN_PASSWORD_ENV_KEY];
     if (!superPwd || json.password !== superPwd) {
@@ -637,12 +597,10 @@ async function handleSuperAdminAction(action, json, env, ip, request) {
         return new Response(JSON.stringify({ status: "fail", msg: "密碼錯誤" }));
     }
 
-    // ★ 修復：敏感操作密碼驗證邏輯
     if (["super_admin_delete_group", "super_admin_reset_group_data"].includes(action)) {
         const config = await getSystemConfig(env);
         const secPolicy = config.security_policy || {};
         
-        // 只有在「已啟用」且「密碼不為空」時才檢查
         if (secPolicy.require_password_for_destructive_actions === true) {
             const serverSidePwd = (secPolicy.action_password || "").trim();
             const clientSidePwd = (json.actionPassword || "").trim();
@@ -786,13 +744,6 @@ async function handleSuperAdminAction(action, json, env, ip, request) {
     return new Response(JSON.stringify({status: "fail", msg: "Unknown Super Admin Action"}));
 }
 
-// --- END OF PART 4 ---
-
-// --- START OF PART 5 (Webhook Entry & System Commands) ---
-
-// ====================================================================
-// ★ LINE Webhook (處理 LINE 傳來的事件)
-// ====================================================================
 async function handleLineWebhook(events, env, ctx, origin) {
 for (const event of events) {
     try {
@@ -823,7 +774,6 @@ for (const event of events) {
         if (event.type !== 'message' || event.message.type !== 'text') continue;
         const text = event.message.text.trim();
 
-        // ★ /bot test (健康檢查與維護狀態 - 格式修正版)
         if (text === '/bot test') {
             let isAllowed = isPrivate;
             if (!isPrivate) {
@@ -841,7 +791,7 @@ for (const event of events) {
             const start = Date.now();
             await env.DB.prepare("SELECT 1").first();
             const dbLatency = Date.now() - start;
-            const cfLatency = Math.floor(dbLatency * 1.2 + 10); // 估算值
+            const cfLatency = Math.floor(dbLatency * 1.2 + 10);
 
             const config = await getSystemConfig(env);
             const fe = config.maintenance?.frontend;
@@ -869,7 +819,6 @@ for (const event of events) {
             continue;
         }
 
-        // ★ /bot reboot (強制修復)
         if (text === '/bot reboot') {
             if (gId) {
                 await env.DB.prepare("UPDATE group_auth SET status = 'active', terminated_at = NULL, is_locked = 1, locking_user_id = NULL WHERE group_id = ?").bind(gId).run();
@@ -880,7 +829,6 @@ for (const event of events) {
             continue;
         }
 
-        // ★ 私訊綁定邏輯 (/bind)
         if (isPrivate) {
             if (text.startsWith('/bind ')) {
                 const code = text.replace('/bind ', '').trim();
@@ -930,28 +878,19 @@ for (const event of events) {
             continue;
         }
 
-// --- END OF PART 5 ---
-
-// --- START OF PART 6 (Fix Logic & Syntax) ---
-
-// --- 接續 Part 5 的 try 區塊 ---
-
 if (text === '/bot help') { 
     const helpMsg = `🤖 指令清單：\n🔹 /bot 學生：取得學生網址\n🔹 /bot 後台：取得後台網址\n🔹 /bot 復原碼：顯示復原碼 (限私訊)\n🔹 /bot ID：顯示群組 ID\n\n⚙️ 管理指令：\n/bind <4碼>：綁定管理員(限私訊)\n\n⚙️ 其他：\n/bot newID：生成新群組\n/bot <ID>：沿用舊設定\n/bot test：系統診斷(限管理員)\n/bot reboot：重啟服務`; 
     ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, helpMsg)); 
     continue; 
 }
 
-// 取得群組基本資料 (用於判斷狀態)
 const groupAuth = await env.DB.prepare("SELECT * FROM group_auth WHERE group_id = ?").bind(gId).first();
 
-// ★ 隱藏指令：/bot allagree (強制解鎖，並不需綁定特定使用者狀態)
 if (text === '/bot allagree' && gId) {
     await env.DB.prepare("INSERT OR IGNORE INTO group_auth (group_id) VALUES (?)").bind(gId).run();
-    // 強制解鎖並更新版本
+    
     await env.DB.prepare("UPDATE group_auth SET is_locked = 0, locking_user_id = NULL, version = ? WHERE group_id = ?").bind(TERMS_VERSION, gId).run();
     
-    // 判斷是否需要初始化 (若無角色設定)
     let setupHint = "";
     const currentRoles = groupAuth ? groupAuth.角色設定 : null;
     if (!currentRoles || currentRoles === '{}') {
@@ -962,30 +901,24 @@ if (text === '/bot allagree' && gId) {
     continue;
 }
 
-// 檢查是否已終止
 if (groupAuth && groupAuth.status === 'terminated') continue; 
 
-// 取得使用者狀態
 let userState = await env.DB.prepare("SELECT * FROM line_user_state WHERE user_id = ? AND group_id = ?").bind(uId, gId).first();
 
-// 檢查是否因「條款更新」或「新成員加入」而鎖定
-// 邏輯：(版本不同 OR 被鎖定) AND 還沒同意
 const isVersionMismatch = groupAuth && groupAuth.version !== TERMS_VERSION;
 const isLocked = groupAuth && groupAuth.is_locked === 1;
 const hasAgreed = await env.DB.prepare("SELECT 1 FROM group_agreements WHERE group_id = ? AND user_id = ?").bind(gId, uId).first();
 
-// 若版本不符，先鎖定群組
 if (isVersionMismatch && !isLocked) {
     await env.DB.prepare("UPDATE group_auth SET is_locked = 1 WHERE group_id = ?").bind(gId).run();
-    await env.DB.prepare("DELETE FROM group_agreements WHERE group_id = ?").bind(gId).run(); // 清空舊同意紀錄
+    await env.DB.prepare("DELETE FROM group_agreements WHERE group_id = ?").bind(gId).run(); 
     ctx.waitUntil(replyLineMessageWithButton(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `🔄 服務條款已更新 (${TERMS_VERSION})！\n為確保權益，請全體成員重新同意。\n\n${CHANGELOG}\n\n🟢 同意：/bot agree\n🔴 不同意：/bot disagree`, "閱讀條款", `${origin}/terms?ack=1`));
     continue;
 }
 
-// ★ /bot start (初始化)
 if (text === '/bot start') {
     await env.DB.prepare("INSERT OR IGNORE INTO group_auth (group_id) VALUES (?)").bind(gId).run();
-    // 若版本舊，鎖定之
+
     if (isVersionMismatch) {
         await env.DB.prepare("UPDATE group_auth SET is_locked = 1 WHERE group_id = ?").bind(gId).run();
     }
@@ -994,22 +927,17 @@ if (text === '/bot start') {
     continue; 
 }
 
-// --- 狀態機邏輯 ---
-
-// 1. 鎖定狀態 (等待同意)
 if (isLocked || isVersionMismatch) {
     if (text === '/bot agree') {
         if (!hasAgreed) {
             await env.DB.prepare("INSERT OR IGNORE INTO group_agreements (group_id, user_id) VALUES (?, ?)").bind(gId, uId).run();
         }
         
-        // 檢查全員是否同意
+
         if(await checkAllAgreed(env, gId)) {
-            // 解鎖並更新版本
+
             await env.DB.prepare("UPDATE group_auth SET is_locked = 0, locking_user_id = NULL, version = ? WHERE group_id = ?").bind(TERMS_VERSION, gId).run();
             
-            // 檢查是否需要設定 ID
-            // 重新讀取最新的 auth 狀態
             const freshAuth = await env.DB.prepare("SELECT 角色設定 FROM group_auth WHERE group_id = ?").bind(gId).first();
             const isConfigured = freshAuth && freshAuth.角色設定 && freshAuth.角色設定 !== '{}';
 
@@ -1024,16 +952,14 @@ if (isLocked || isVersionMismatch) {
         await env.DB.prepare("UPDATE group_auth SET status = 'terminated', terminated_at = ? WHERE group_id = ?").bind(terminatedAt, gId).run();
         ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `🚨 服務緊急終止。\n因成員拒絕條款，服務已永久關閉。`));
     }
-    // 鎖定期間不回應其他指令
+    
     continue;
 }
 
-// 2. 設定狀態 (群組未鎖定，但尚未有角色設定)
-// ★ 關鍵修復：不依賴使用者個人的 state，而是看群組是否「空設定」
 const isGroupConfigured = groupAuth && groupAuth.角色設定 && groupAuth.角色設定 !== '{}';
 
 if (!isGroupConfigured) {
-    // 建立新群組
+
     if (text.startsWith('/bot newID')) {
         const sysConfig = await getSystemConfig(env);
         const policy = sysConfig.creation_policy || { mode: 'open', password: '' };
@@ -1055,7 +981,6 @@ if (!isGroupConfigured) {
         const rescueCode = genRescueCode();
         const bindingCode = Math.floor(1000 + Math.random() * 9000).toString();
         const initialRoles = { "Administrator": { hash: "", subjects: ["all"], perm: ["manage_roles", "manage_settings", "manage_tasks_full"], level: 99, rec: rescueCode, binding_code: bindingCode } };
-        // 預設科目
         const defaultSubjects = JSON.stringify({ 
             '國文': ['國文', '國語'], '英文': ['英文'], '數學': ['數學'], '地理': ['地理'], 
             '歷史': ['歷史'], '公民': ['公民'], '理化': ['理化', '物理', '化學'], '生物': ['生物'], 
@@ -1064,21 +989,19 @@ if (!isGroupConfigured) {
         
         await env.DB.prepare("UPDATE group_auth SET 群組名稱 = ?, 角色設定 = ?, 科目設定 = ?, status = 'active', version = ?, is_locked = 0 WHERE group_id = ?").bind('未命名群組', JSON.stringify(initialRoles), defaultSubjects, TERMS_VERSION, gId).run();
         
-        // 更新當前使用者狀態 (方便日後追蹤，非必要)
         await env.DB.prepare("INSERT OR REPLACE INTO line_user_state (user_id, group_id, state) VALUES (?, ?, 'setup_complete')").bind(uId, gId).run();
         
         ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, getNewWelcomeMessage(gId, origin)));
         continue;
     }
     
-    // 沿用舊群組
     if (text.startsWith('/bot ') && text.length > 6) {
          const inputId = text.replace('/bot ', '').trim();
-         // 檢查該 ID 是否存在且已設定
+        
          const oldGroup = await env.DB.prepare("SELECT group_id FROM group_auth WHERE group_id = ? AND 角色設定 IS NOT NULL").bind(inputId).first();
          
          if (oldGroup) {
-            // 更新目前使用者的指標
+
             await env.DB.prepare("INSERT OR REPLACE INTO line_user_state (user_id, group_id, state) VALUES (?, ?, 'setup_complete')").bind(uId, inputId).run();
             ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, getExistingWelcomeMessage(inputId, origin)));
          } else {
@@ -1086,19 +1009,17 @@ if (!isGroupConfigured) {
          }
          continue;
     }
-    
-    // 若尚未設定，不處理其他指令 (或提示需設定)
-    // 這裡選擇靜默，除非輸入指令錯誤
+
     if (text.startsWith('/bot')) {
          ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, "⚠️ 此群組尚未初始化，請輸入 `/bot newID` 建立資料。"));
     }
     continue;
 }
 
-// 3. 正常運作狀態 (已設定且未鎖定)
-const finalGid = userState?.group_id || gId; // 優先使用個人綁定的 ID (針對沿用舊 ID 的情況)
 
-// 檢查禁用指令
+const finalGid = userState?.group_id || gId; 
+
+
 let settings = {}; try { settings = JSON.parse(groupAuth.advanced_settings || '{}'); } catch(e){}
 const disabledCmds = settings.disabled_commands || [];
 if (text.startsWith('/bot') && disabledCmds.some(cmd => text.startsWith(cmd))) {
@@ -1106,7 +1027,6 @@ if (text.startsWith('/bot') && disabledCmds.some(cmd => text.startsWith(cmd))) {
     continue;
 }
 
-// 刪除群組流程
 if (text === '/bot end') { 
     ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `⚠️ 確定要刪除 ${finalGid} 的所有資料嗎？\n請在 30 秒內輸入：確認刪除 ${finalGid}`)); 
     await env.DB.prepare("INSERT OR REPLACE INTO line_user_state (user_id, group_id, state) VALUES (?, ?, 'awaiting_delete_confirm')").bind(uId, finalGid).run(); 
@@ -1120,12 +1040,10 @@ if (userState?.state === 'awaiting_delete_confirm' && text === `確認刪除 ${f
     continue;
 }
 
-// 一般資訊指令
 if (text === "/bot 學生" || text === "/bot student") { ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `📊 學生班級作業：\n${origin}/?id=${finalGid}`)); continue; } 
 if (text === "/bot 後台" || text === "/bot manager") { ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `🔧 後台管理：\n${origin}/manager?id=${finalGid}`)); continue; } 
 if (text === "/bot ID") { ctx.waitUntil(replyLineMessage(env.LINE_CHANNEL_ACCESS_TOKEN, event.replyToken, `Group ID:\n${finalGid}`)); continue; } 
 
-// 作業判讀 (AI / 規則)
 if (!text.startsWith('/')) {
     let subConfig = null; try { subConfig = JSON.parse(groupAuth.科目設定 || '{}'); } catch(e){}
     let periods = settings.periods || {};
@@ -1161,17 +1079,8 @@ if (!text.startsWith('/')) {
     console.error("Webhook Error:", err); 
     try { await writeLog(env, "SYSTEM", "Webhook", "CriticalError", err.message, null); } catch(e){}
 }
-} // End of for loop
+} 
 return new Response("ok");
-} // End of handleLineWebhook
-
-// --- END OF PART 6 ---
-
-// --- START OF PART 7 (Helper Fixes) ---
-
-// ====================================================================
-// ★ 輔助函式區 (Helpers)
-// ====================================================================
 
 async function hashPassword(password) {
     const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -1269,7 +1178,6 @@ function parseTask(text, subjectConfig, periods) {
     let cat = text.includes("考") ? "考試" : (text.includes("帶") ? "攜帶" : "作業");
     let sub = "其他"; 
     
-    // ★ 關鍵防呆：若 subjectConfig 為空，強制使用預設值
     const defaults = { "國語": ["國文", "國語"], "英文": ["英文"], "數學": ["數學"], "自然": ["自然", "生物", "理化"], "社會": ["社會", "歷史", "地理", "公民"] };
     const subs = (subjectConfig && Object.keys(subjectConfig).length > 0) ? subjectConfig : defaults;
     
@@ -1332,14 +1240,16 @@ function renderEULAHTML(redirectUrl, origin) {
 }
 
 function renderHomePage(origin) {
-    return `<!DOCTYPE html><html lang="zh-TW"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>LINE資料整合分類機器</title><script src="https://cdn.tailwindcss.com"></script><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"></head><body class="bg-gradient-to-b from-blue-900 to-gray-900 text-white min-h-screen flex flex-col items-center justify-center p-6"><div class="max-w-2xl text-center space-y-6"><div class="text-6xl mb-4">🤖</div><h1 class="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">LINE資料整合分類機器</h1><p class="text-gray-300 text-lg">協助整理LINE訊息進行篩選的機器</p><div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-8"><a href="${LINK_LINE_HOST}" target="_blank" class="bg-[#181717] hover:bg-[#2d2d2d] text-white py-3 px-6 rounded-xl font-bold flex items-center justify-center gap-2 transition transform hover:scale-105"><i class="fab fa-github text-2xl"></i> 開始架設自己的機器</a><a href="${LINK_DISCORD}" target="_blank" class="bg-[#5865F2] hover:bg-[#4752c4] text-white py-3 px-6 rounded-xl font-bold flex items-center justify-center gap-2 transition transform hover:scale-105"><i class="fab fa-discord text-2xl"></i> 加入 Discord</a></div></div></body></html>`;
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>RayBot</title></head>
+    <body style="background:#111; color:#fff; display:flex; justify-content:center; align-items:center; height:100vh; font-family:sans-serif;">
+        <div style="text-align:center;">
+            <h1>🤖 RayBot 作業系統</h1>
+            <p>請使用正確的班級網址訪問。</p>
+            <p style="color:#888; font-size:0.8em;">(Missing Group ID)</p>
+        </div>
+    </body></html>`;
 }
 
-// --- END OF PART 7 ---
-
-// --- START OF PART 8 (Fix Frontend Pwd Sending) ---
-
-// 6. Super Admin 後台
 function renderSuperAdminHTML(origin) {
     return `<!DOCTYPE html><html lang="zh-TW" class="dark"><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Super Admin</title>
     ${COMMON_UI_SCRIPT}
@@ -1630,7 +1540,6 @@ function renderSuperAdminHTML(origin) {
             loadData();
         }
         
-        // ★ 修復：saveMaint
         async function saveMaint() {
             const newMaint = { frontend: { enabled: document.getElementById('fe-enabled').checked, type: document.getElementById('fe-type').value, message: document.getElementById('fe-msg').value, end: document.getElementById('fe-end').value }, backend: { enabled: document.getElementById('be-enabled').checked, type: document.getElementById('be-type').value, message: document.getElementById('be-msg').value, end: document.getElementById('be-end').value } };
             await apiRequest({ action:'super_admin_set_maintenance', maintenance: newMaint }); successAlert('維護設定已儲存');
@@ -1662,11 +1571,6 @@ function renderSuperAdminHTML(origin) {
     </script></body></html>`;
 }
 
-// --- END OF PART 8 ---
-
-// --- START OF PART 9 ---
-
-// 7. 學生作業頁面 (XSS 防護強化)
 function renderStudentHTML(origin) {
     const css = "<style>.filter-btn { white-space: nowrap; padding: 0.5rem 1rem; border-radius: 9999px; background: #374151; color: #d1d5db; border: 1px solid #4b5563; transition: 0.2s; font-size: 0.875rem; cursor: pointer; } .filter-btn.active { background: #2563eb; color: white; border-color: #2563eb; } .month-scroll { -ms-overflow-style: none; scrollbar-width: none; } .month-scroll::-webkit-scrollbar { display: none; } .task-card { transition: transform 0.2s; border-left-width: 4px; } .task-card:active { transform: scale(0.98); }</style>";
 
@@ -1743,10 +1647,6 @@ function renderStudentHTML(origin) {
 
     return `<!DOCTYPE html><html lang="zh-TW"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>班級作業</title>${COMMON_UI_SCRIPT}${css}</head><body class="bg-gray-900 text-white min-h-screen pb-20"><div class="max-w-4xl mx-auto p-4" id="main-container"><div class="text-center mb-4"><h1 class="text-2xl font-bold text-white mb-1" id="page-title">📋 載入中...</h1><p class="text-xs text-gray-400" id="page-date"></p></div><div id="loading" class="text-center py-8"><i class="fas fa-spinner fa-spin text-3xl text-blue-500"></i></div><div id="error-msg" class="hidden bg-red-900/50 p-4 rounded text-center mb-4 text-red-200 border border-red-700"></div><div id="filters" class="hidden space-y-3 mb-4"><div class="flex justify-center"><div class="bg-gray-800 p-1 rounded-full border border-gray-700 flex shadow-sm"><button onclick="setFilter('status', 'active')" id="btn-status-active" class="px-6 py-1.5 rounded-full text-sm font-bold transition bg-blue-600 text-white">進行中</button><button onclick="setFilter('status', 'history')" id="btn-status-history" class="px-6 py-1.5 rounded-full text-sm font-bold transition text-gray-400 hover:text-white">已結束</button></div></div><div class="flex overflow-x-auto gap-2 month-scroll py-1 px-1" id="month-filter-list"></div><div class="flex gap-2"><button onclick="openSubjectFilter()" class="flex-1 bg-gray-800 py-2.5 rounded-lg text-sm border border-gray-700 flex items-center justify-center shadow active:bg-gray-700 hover:border-gray-500 transition"><i class="fas fa-filter mr-2 text-blue-400"></i> <span id="current-subject-label">全部科目</span></button></div><div id="mention-alert" class="hidden bg-purple-900/40 border border-purple-500/50 text-purple-200 px-3 py-2 rounded-lg text-sm flex items-center justify-between animate-pulse"><span><i class="fas fa-at mr-2"></i> 只顯示標註 <b id="mention-name"></b> 的作業</span><button onclick="clearMention()" class="text-purple-300 hover:text-white px-2"><i class="fas fa-times"></i></button></div></div><div id="content-area" class="space-y-3"></div></div><div id="suggestion-modal" class="fixed inset-0 z-[9999] hidden items-center justify-center bg-black/80 backdrop-blur-sm p-4"><div class="bg-gray-800 rounded-xl w-full max-w-sm border border-gray-700 overflow-hidden shadow-2xl transform transition-all"><div class="p-4 border-b border-gray-700 flex justify-between items-center bg-gray-750"><h3 class="font-bold text-white"><i class="fas fa-edit mr-2 text-yellow-500"></i>勘誤/建議</h3><button onclick="closeSuggestion()" class="text-gray-400 hover:text-white w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-700"><i class="fas fa-times"></i></button></div><div class="p-4 space-y-4"><input type="hidden" id="sug-task-id"><input type="text" id="sug-subject" class="w-full bg-gray-900 border-gray-600 border rounded p-2 text-white" placeholder="科目"><select id="sug-category" class="w-full bg-gray-900 border-gray-600 border rounded p-2 text-white"><option value="作業">作業</option><option value="考試">考試</option><option value="攜帶">攜帶</option></select><textarea id="sug-content" rows="4" class="w-full bg-gray-900 border-gray-600 border rounded p-2 text-white" placeholder="修正內容..."></textarea></div><div class="p-4 border-t border-gray-700"><button onclick="submitSuggestion()" class="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-bold">送出建議</button></div></div></div><script>${clientScript}</script></body></html>`;
 }
-
-// --- END OF PART 9 ---
-
-// --- START OF PART 10 (Fix Sidebar Alignment, Eye Icon & Disabled Inputs) ---
 
 function renderManagerHTML(origin) {
     return `<!DOCTYPE html><html lang="zh-TW"><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>後台管理</title>
@@ -1961,7 +1861,7 @@ function renderManagerHTML(origin) {
         document.getElementById('sidebar').classList.toggle('active'); 
         document.getElementById('sidebar-overlay').classList.toggle('active'); 
     };
-    // ★ 眼睛切換函式
+    
     window.toggleBlur = (id) => { document.getElementById(id).classList.toggle('blur-sm'); };
 
     window.switchView = (v) => {
@@ -2003,12 +1903,11 @@ function renderManagerHTML(origin) {
             document.getElementById('role-display').innerText = selectedRole;
             myRoleData = d.roleData;
             
-            // 綁定碼 (預設模糊)
             if(d.roleData.binding_code) { 
                 document.getElementById('binding-code-area').classList.remove('hidden'); 
                 document.getElementById('bind-code').innerText = d.roleData.binding_code; 
             }
-            // 救援碼 (預設模糊)
+
             if(d.roleData.rec) { 
                 document.getElementById('rescue-code-area').classList.remove('hidden'); 
                 document.getElementById('rec-code').innerText = d.roleData.rec; 
@@ -2101,7 +2000,7 @@ function renderManagerHTML(origin) {
         Object.keys(subjects).forEach(s => c.innerHTML+=\`<label class="perm-row"><input type="checkbox" value="\${s}" class="r-sub perm-checkbox"> <span>\${s}</span></label>\`);
         
         const isSelf = (n === selectedRole);
-        // ★ 禁止修改 Administrator 的名稱與密碼
+
         if (n === 'Administrator') {
              document.getElementById('r-name').disabled = true;
              document.getElementById('r-pwd').disabled = true;
@@ -2207,5 +2106,3 @@ function renderManagerHTML(origin) {
     async function apiCall(d){ d.groupId=gId; d.password=localStorage.getItem('hw_pwd'); d.roleName=selectedRole; const res=await fetch(location.href,{method:'POST',body:JSON.stringify(d)}); const r=await res.json(); if(r.status==='success'){ if(d.action!=='admin_get_tasks') loadTasks(); } else errorAlert(r.msg); }
     </script></body></html>`;
 }
-
-// --- END OF PART 10 (FINAL ULTIMATE FIX v4.9.6) ---
