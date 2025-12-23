@@ -168,3 +168,4 @@ For commercial licensing, custom modifications, or usage beyond the scope of thi
 
 [所有教學內容，例如安裝、配置、範例程式碼等。]  
 [程式碼還在測試中，待測試完畢才會進行教學。]
+[教學目前請參考完整部署手冊(有效完整簡單教學).md]
